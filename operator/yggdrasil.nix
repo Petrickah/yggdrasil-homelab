@@ -16,6 +16,11 @@
   # Nothing comes in: you work from the Proxmox console (`pct enter`)
   services.openssh.enable = false;
 
+  # The console logs straight in as root. Reaching it already takes a Proxmox
+  # login, and anyone with that can `pct enter` as root anyway — a password
+  # here would protect against no one, and would be one more secret to rotate.
+  services.getty.autologinUser = "root";
+
   environment.systemPackages = with pkgs; [ git zstd ];
 
   # Use the latest NixOS version
