@@ -1,0 +1,32 @@
+# Build results, state and caches
+results/
+__pycache__/
+share/terraform/.terraform/
+share/terraform/terraform.tfstate*
+share/terraform/*.tfvars.json
+
+# Service data and plaintext credentials
+share/services/*/data/
+share/services/*/auth/
+share/services/*/.env
+
+# Secrets: only sops-encrypted *.yaml is published. admin-key.age (the admin
+# key behind a passphrase) stays out of git on purpose — it still travels in
+# every kit/template, which are built from the folder, not from git.
+share/secrets/*
+!share/secrets/*.yaml
+
+# This installation's addresses and hosts — copy site.example.json
+site.json
+
+# Kept in the private vault only: project notes, AI agent directives, and the
+# legacy Docker Compose setup on the old single VM (retired after migration)
+share/notes/
+CLAUDE.md
+_habitat.md
+share/services/*/compose.yml
+share/services/registry/cleanup-old-tags.py
+share/services/hermes-terminal/
+share/services/dump-server/
+share/scripts/backup.sh
+share/scripts/status.sh

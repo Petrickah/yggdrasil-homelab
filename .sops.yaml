@@ -1,0 +1,38 @@
+# Who can decrypt what. Public keys only — the private ones live outside the
+# vault, in ~/.config/sops/age/ (admin: keys.txt, hosts: hosts/<host>.txt).
+#
+# Edit a secret:   sops share/secrets/<file>.yaml
+# After changing recipients below:   sops updatekeys share/secrets/<file>.yaml
+keys:
+  - &admin       age1l4h8jrc6yltllsq293tczg3shqps04zuw8u4w32nek7kdh95g98s4q3ykt
+  - &mimisbrunnr age15j8sjayajvqdjzyw3wqz53p3zlyl3j2n75jmwtzxqupaprcpng2qackcg0
+  - &nidavellir  age1kxm6yrej58kpahc4372cfxax06fhfuet2waj9vat95dxka80a9mq9axqfc
+  - &alfheim     age1g8umc9zz58rlcxuragly7cqr3aa4rq9qjalqkxylve3clx8c9a8s9nwnph
+
+creation_rules:
+  # Shared by every VM (Tailscale auth key)
+  - path_regex: share/secrets/common\.yaml$
+    key_groups:
+      - age: [ *admin, *mimisbrunnr, *nidavellir, *alfheim ]
+
+  # Terraform credentials — only the operator (admin key) can read them
+  - path_regex: share/secrets/terraform\.yaml$
+    key_groups:
+      - age: [ *admin ]
+
+  # The hosts' own private age keys, injected into each image by bootstrap.py.
+  # Admin-only, so any copy of the kit needs nothing but the admin key.
+  - path_regex: share/secrets/hosts\.yaml$
+    key_groups:
+      - age: [ *admin ]
+
+  # One file per host, for that host's services
+  - path_regex: share/secrets/mimisbrunnr\.yaml$
+    key_groups:
+      - age: [ *admin, *mimisbrunnr ]
+  - path_regex: share/secrets/nidavellir\.yaml$
+    key_groups:
+      - age: [ *admin, *nidavellir ]
+  - path_regex: share/secrets/alfheim\.yaml$
+    key_groups:
+      - age: [ *admin, *alfheim ]

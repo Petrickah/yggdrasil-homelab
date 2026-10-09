@@ -1,0 +1,34 @@
+{
+  "_comment": "Copy to site.json and fill in your own values — site.json is gitignored. Read by flake.nix, share/terraform and bootstrap.py.",
+  "network": {
+    "gateway": "10.0.10.1",
+    "prefixLength": 24,
+    "nameservers": [
+      "1.1.1.1",
+      "8.8.8.8"
+    ]
+  },
+  "nas": {
+    "address": "10.0.10.5",
+    "export": "/volume1/homelab"
+  },
+  "proxmox": {
+    "host": "proxmox.example.ts.net",
+    "node": "pve"
+  },
+  "sshKey": "ssh-ed25519 AAAA... you@example",
+  "hosts": {
+    "mimisbrunnr": {
+      "address": "10.0.10.30"
+    },
+    "nidavellir": {
+      "address": "10.0.10.31"
+    },
+    "alfheim": {
+      "address": "10.0.10.32"
+    },
+    "asgard": {
+      "address": "10.0.10.2"
+    }
+  }
+}
