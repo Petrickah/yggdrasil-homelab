@@ -1,5 +1,7 @@
 { config, lib, pkgs, site, ... }:
 {
+  imports = [ ../share/services/vaultwarden ];
+
   # Identity and static networking — no cloud-init involved, everything below
   # is baked into this host's own image at build time.
   homelab.heimdall.enable = true;
