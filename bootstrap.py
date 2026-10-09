@@ -8,7 +8,7 @@ Nix and the sops admin age key (~/.config/sops/age/keys.txt).
   build   [--image]           template + kit → NAS; --image also makes the qcow2
                               (--host yggdrasil: the root LXC template, for `pct create`)
   init    [--apply|--destroy] terraform, with its state kept on the Proxmox host
-  switch                      nixos-rebuild switch on the running VM
+  switch                      build here, copy over SSH, activate on the running VM
   clean   [--archives] [--images] [--store] [--all]
   create  | backup | restore [--from <file>]   (--host yggdrasil only)
                               the root LXC is never Terraform's: created here,
@@ -235,13 +235,26 @@ def step_init(hosts, proxmox, apply, destroy, yes):
 
 
 def step_switch(host, user):
-    """nixos-rebuild switch on the running VM, built here and copied over SSH."""
-    print(f"\n═══ NixOS rebuild switch for {host} ═══")
-    env = dict(os.environ, NIX_SSHOPTS=" ".join(str(o) for o in ssh_opts()))
-    run(["nix", "run", "--inputs-from", FLAKE, "nixpkgs#nixos-rebuild", "--",
-         "switch", "--flake", f"{FLAKE}#{host}", "--target-host", f"{user or vm_user(host)}@{host}", "--sudo"],
-        cwd=REPO_ROOT, env=env)
+    """What nixos-rebuild --target-host does, done with the local Nix.
 
+    Not nixos-rebuild itself: it brings its own upstream Nix, which copies the
+    whole `path:` flake — live service data included, ~3G — into the store on
+    every run, filling the disk and starving this VM. The local Determinate Nix
+    evaluates lazily and only copies what the kit actually uses."""
+    print(f"\n═══ NixOS switch for {host} ═══")
+    target   = f"{user or vm_user(host)}@{host}"
+    toplevel = run(["nix", "build", "--no-link", "--print-out-paths",
+                    f"{FLAKE}#nixosConfigurations.{host}.config.system.build.toplevel"],
+                   cwd=REPO_ROOT, stdout=subprocess.PIPE, text=True).stdout.strip()
+
+    env = dict(os.environ, NIX_SSHOPTS=" ".join(str(o) for o in ssh_opts()))
+    # Built right here: the VM takes them unsigned because the user is in trusted-users
+    run(["nix", "copy", "--no-check-sigs", "--to", f"ssh-ng://{target}", toplevel], env=env)
+
+    # As a transient unit, so the activation finishes even if SSH drops midway
+    ssh(target, f"sudo nix-env -p /nix/var/nix/profiles/system --set {toplevel} && "
+                f"sudo systemd-run --collect --no-ask-password --pipe --quiet --service-type=exec "
+                f"--unit=bootstrap-switch-to-configuration {toplevel}/bin/switch-to-configuration switch")
 
 def step_clean(host, proxmox, archives, images, store):
     """Remove what build left behind, locally and on the Proxmox host/NAS."""
@@ -593,7 +606,7 @@ def parse_args():
     clean.add_argument("--store", action="store_true", help="nix store gc, locally")
 
     # ── switch ──
-    sub.add_parser("switch", help="Run nixos-rebuild switch on host")
+    sub.add_parser("switch", help="Build, copy and activate the config on the running VM")
 
     # ── init ──
     init = sub.add_parser("init", help="Initialize or destroy infrastructure")

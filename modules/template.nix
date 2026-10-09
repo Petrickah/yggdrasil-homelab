@@ -52,6 +52,9 @@ in
       before      = [ "docker-${name}.service" ];
       requiredBy  = lib.optional (config.virtualisation.oci-containers.containers ? ${name}) "docker-${name}.service";
       unitConfig.ConditionPathExists = "!/var/lib/services/${name}";
+      # Its script changes with every kit (it points into it); restarting it on
+      # switch would do nothing but restart the container that Requires it.
+      restartIfChanged = false;
       serviceConfig.Type = "oneshot";
       script = ''
         mkdir -p /var/lib/services
