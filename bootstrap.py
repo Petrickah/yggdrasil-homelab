@@ -10,6 +10,9 @@ Nix and the sops admin age key (~/.config/sops/age/keys.txt).
   init    [--apply|--destroy] terraform, with its state kept on the Proxmox host
   switch                      nixos-rebuild switch on the running VM
   clean   [--archives] [--images] [--store] [--all]
+  create  | backup | restore [--from <file>]   (--host yggdrasil only)
+                              the root LXC is never Terraform's: created here,
+                              backed up here, removed only by hand in Proxmox
   rotate  console-password | admin-passphrase | admin-key | host-key |
           proxmox-token | ssh-key | secret <file> <key>
 """
@@ -55,6 +58,7 @@ PROXMOX_HOST         = SITE["proxmox"]["host"]
 PROXMOX_TEMPLATE_DIR = "/mnt/pve/syno-nfs/template/cache"  # syno-nfs = the NAS
 PROXMOX_IMPORT_DIR   = "/var/lib/vz/import"                # local:import
 PROXMOX_STATE_DIR    = "/root/homelab"                     # terraform state lives here
+PROXMOX_BACKUP_DIR   = "/mnt/pve/syno-nfs/dump"            # vzdump on the NAS
 
 # sops: the admin key (outside the repo) and the passphrase-protected copy in it
 AGE_DIR       = Path.home() / ".config" / "sops" / "age"
@@ -258,6 +262,85 @@ def step_clean(host, proxmox, archives, images, store):
     if store:
         print(f"\n═══ Clean local Nix store ═══")
         run(["nix", "store", "gc"], cwd=REPO_ROOT)
+
+
+# ── Yggdrasil, the root LXC ────────────────────────────────────────────────
+# Deliberately outside Terraform: a `destroy` run from inside Yggdrasil must
+# never be able to take Yggdrasil down. It's created with Proxmox's
+# protection flag, so removing it means unticking Protection in the UI first.
+
+def latest_remote(proxmox, pattern):
+    """Newest file matching `pattern` on the Proxmox host, or None."""
+    out = subprocess.run(["ssh", *ssh_opts(), f"root@{proxmox}", f"ls -1t {pattern} 2>/dev/null | head -1"],
+                         check=True, capture_output=True, text=True).stdout.strip()
+    return out or None
+
+
+def guest_exists(proxmox, vmid):
+    out = subprocess.run(["ssh", *ssh_opts(), f"root@{proxmox}",
+                          "pvesh get /cluster/resources --type vm --output-format json"],
+                         check=True, capture_output=True, text=True).stdout
+    return any(r.get("vmid") == vmid for r in json.loads(out))
+
+
+def require_backup_storage(proxmox):
+    if subprocess.run(["ssh", *ssh_opts(), f"root@{proxmox}", "pvesm status --storage syno-nfs"],
+                      capture_output=True).returncode != 0:
+        nas = SITE["nas"]
+        sys.exit("✕ No `syno-nfs` storage on this Proxmox yet. Add it first:\n"
+                 f"  pvesm add nfs syno-nfs --server {nas['address']} --export {nas['export']} "
+                 "--content vztmpl,backup,import,snippets")
+
+
+def step_create_root(proxmox):
+    """Create Yggdrasil from the newest template on the NAS, protected."""
+    cfg, target = SITE["yggdrasil"], f"root@{proxmox}"
+    print(f"\n═══ Create {ROOT} (CT {cfg['ctid']}) ═══")
+    require_backup_storage(proxmox)
+    if guest_exists(proxmox, cfg["ctid"]):
+        sys.exit(f"✕ CT {cfg['ctid']} already exists — `restore` needs it gone, and only you remove it, by hand.")
+    template = latest_remote(proxmox, f"{PROXMOX_TEMPLATE_DIR}/vztmpl-nixos-{ROOT}-*")
+    if not template:
+        sys.exit(f"✕ No {ROOT} template on the NAS — run `bootstrap.py --host {ROOT} build` first.")
+
+    net = SITE["network"]
+    ip  = f"ip={cfg['address']}/{net['prefixLength']},gw={net['gateway']}"
+    ssh(target, f"pct create {cfg['ctid']} syno-nfs:vztmpl/{Path(template).name} "
+                f"--hostname {ROOT} --ostype nixos --unprivileged 1 --features nesting=1 "
+                f"--cores {cfg['cores']} --memory {cfg['memory']} --rootfs local-zfs:{cfg['disk']} "
+                f"--net0 name=eth0,bridge=vmbr0,{ip} --nameserver '{' '.join(net['nameservers'])}' "
+                f"--onboot 1 --protection 1 "
+                f"--description 'Yggdrasil, the root of the homelab. Not managed by Terraform. "
+                f"Before removing it: bootstrap.py --host {ROOT} backup, then untick Protection.'")
+    ssh(target, f"pct start {cfg['ctid']}")
+    print(f"✔ {ROOT} is up at {cfg['address']} — `pct enter {cfg['ctid']}` on Proxmox to get in.")
+
+
+def step_backup_root(proxmox):
+    """vzdump Yggdrasil to the NAS, keeping the newest few."""
+    cfg, target = SITE["yggdrasil"], f"root@{proxmox}"
+    print(f"\n═══ Back up {ROOT} (CT {cfg['ctid']}) ═══")
+    require_backup_storage(proxmox)
+    if not guest_exists(proxmox, cfg["ctid"]):
+        sys.exit(f"✕ CT {cfg['ctid']} doesn't exist — nothing to back up.")
+    ssh(target, f"vzdump {cfg['ctid']} --storage syno-nfs --mode snapshot --compress zstd "
+                f"--prune-backups keep-last=7")
+    newest = latest_remote(proxmox, f"{PROXMOX_BACKUP_DIR}/vzdump-lxc-{cfg['ctid']}-*.tar.zst")
+    print(f"✔ {newest}")
+
+
+def step_restore_root(proxmox, from_file):
+    """Bring Yggdrasil back from a backup into an empty CT id, protected again."""
+    cfg, target = SITE["yggdrasil"], f"root@{proxmox}"
+    print(f"\n═══ Restore {ROOT} (CT {cfg['ctid']}) ═══")
+    if guest_exists(proxmox, cfg["ctid"]):
+        sys.exit(f"✕ CT {cfg['ctid']} still exists — remove it by hand first (untick Protection).")
+    backup = from_file or latest_remote(proxmox, f"{PROXMOX_BACKUP_DIR}/vzdump-lxc-{cfg['ctid']}-*.tar.zst")
+    if not backup:
+        sys.exit(f"✕ No backup of CT {cfg['ctid']} in {PROXMOX_BACKUP_DIR}.")
+    ssh(target, f"pct restore {cfg['ctid']} {backup} --storage local-zfs --unprivileged 1")
+    ssh(target, f"pct set {cfg['ctid']} --protection 1 && pct start {cfg['ctid']}")
+    print(f"✔ {ROOT} restored from {Path(backup).name}.")
 
 
 # ── Rotation ───────────────────────────────────────────────────────────────
@@ -518,6 +601,12 @@ def parse_args():
     init.add_argument("--destroy", action="store_true", help="Terraform destroy")
     init.add_argument("--yes", action="store_true", help="Don't ask for confirmation")
 
+    # ── yggdrasil ──
+    sub.add_parser("create", help="Create the root LXC (--host yggdrasil)")
+    sub.add_parser("backup", help="Back up the root LXC to the NAS (--host yggdrasil)")
+    restore = sub.add_parser("restore", help="Restore the root LXC from its newest backup (--host yggdrasil)")
+    restore.add_argument("--from", dest="from_file", help="A specific vzdump file on the Proxmox host")
+
     # ── rotate ──
     rotate = sub.add_parser("rotate", help="Rotate keys, passwords and tokens")
     what = rotate.add_subparsers(dest="what", required=True)
@@ -544,7 +633,9 @@ def main():
     hosts = [args.host] if args.host else HOSTS
 
     if ROOT in hosts and (args.command in ("init", "switch") or getattr(args, "image", False)):
-        sys.exit(f"✕ {ROOT} is an LXC template only: `build` it, then `pct create` it on Proxmox.")
+        sys.exit(f"✕ {ROOT} isn't a Terraform VM: `build` it, then `create`, `backup` or `restore` it.")
+    if args.command in ("create", "backup", "restore") and args.host != ROOT:
+        sys.exit(f"✕ `{args.command}` is only for the root LXC: add --host {ROOT}.")
 
     if args.command == "build":
         for h in hosts:
@@ -561,6 +652,15 @@ def main():
         if args.apply and args.destroy:
             sys.exit("✕ --apply and --destroy are exclusive.")
         step_init(hosts, args.proxmox, args.apply, args.destroy, args.yes)
+
+    elif args.command == "create":
+        step_create_root(args.proxmox)
+
+    elif args.command == "backup":
+        step_backup_root(args.proxmox)
+
+    elif args.command == "restore":
+        step_restore_root(args.proxmox, args.from_file)
 
     elif args.command == "rotate":
         if args.what == "console-password":
