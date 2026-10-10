@@ -363,7 +363,8 @@ def step_create_root(proxmox):
                 f"--hostname {ROOT} --ostype nixos --unprivileged 1 --features nesting=1 "
                 f"--cores {cfg['cores']} --memory {cfg['memory']} --rootfs local-zfs:{cfg['disk']} "
                 f"--net0 name=eth0,bridge=vmbr0,{ip} --nameserver '{' '.join(net['nameservers'])}' "
-                f"--onboot 1 --protection 1 "
+                f"--onboot 1 --protection 1 --dev0 /dev/net/tun "   # Tailscale needs a TUN device
+                
                 f"--description 'Yggdrasil, the root of the homelab. Not managed by Terraform. "
                 f"Before removing it: bootstrap.py --host {ROOT} backup, then untick Protection.'")
     ssh(target, f"pct start {cfg['ctid']}")
