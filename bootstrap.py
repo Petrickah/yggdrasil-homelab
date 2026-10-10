@@ -10,6 +10,7 @@ Nix and the sops admin age key (~/.config/sops/age/keys.txt).
   init    [--apply|--destroy] terraform, with its state kept on the Proxmox host
   switch                      build here, copy over SSH, activate on the running VM
   seed    <service>           copy share/services/<service>/data to the VM, once
+  agent   [--hours N]         load the homelab SSH key into your ssh-agent, from sops
   clean   [--archives] [--images] [--store] [--all]
   create  | backup | restore [--from <file>]   (--host yggdrasil only)
                               the root LXC is never Terraform's: created here,
@@ -310,6 +311,17 @@ def step_seed(host, service, user):
         sys.exit("✕ Reading the local data failed.")
     size = ssh(target, f"sudo du -sh {dst}", capture_output=True, text=True).stdout.split()[0]
     print(f"✔ {service} data is on {host} ({size}). Now `switch` to start it.")
+
+
+def step_agent(hours):
+    """The homelab key — the one SSH key for logging in anywhere — straight
+    from sops into the running ssh-agent, for a few hours. No file on disk;
+    with a forwarded agent it lands in your Mac's agent and expires there."""
+    if not os.environ.get("SSH_AUTH_SOCK"):
+        sys.exit("✕ No ssh-agent here (SSH_AUTH_SOCK unset) — start one with `eval $(ssh-agent)`.")
+    subprocess.run(["ssh-add", "-t", f"{hours}h", "-"], check=True,
+                   input=sops_decrypt("terraform.yaml", "proxmox_ssh_key"), text=True)
+    print(f"✔ Homelab key in your agent for {hours}h — ssh/git use it without -i.")
 
 
 def step_clean(host, proxmox, archives, images, store):
@@ -637,6 +649,7 @@ def rotate_ssh_key(proxmox, user):
         ssh(target, f"grep -vF '{old_body}' /root/.ssh/authorized_keys > /tmp/authorized_keys.new && "
                     "cat /tmp/authorized_keys.new > /root/.ssh/authorized_keys && rm /tmp/authorized_keys.new")
     print("✔ New SSH key everywhere; the old one is no longer accepted on Proxmox or the VMs.")
+    print("  Replace your copy of it on the Mac (~/.ssh/id_ed25519_homelab) and on Synology/Gitea/GitHub.")
 
 
 def rotate_secret(file, key, from_file):
@@ -670,6 +683,10 @@ def parse_args():
 
     # ── switch ──
     sub.add_parser("switch", help="Build, copy and activate the config on the running VM")
+
+    # ── agent ──
+    agent = sub.add_parser("agent", help="Load the homelab SSH key into your ssh-agent, from sops")
+    agent.add_argument("--hours", type=int, default=8, help="How long the agent keeps it (default 8)")
 
     # ── seed ──
     seed = sub.add_parser("seed", help="Copy a service's data to --host, once, before its first switch")
@@ -759,6 +776,9 @@ def main():
             rotate_ssh_key(args.proxmox, args.user)
         elif args.what == "secret":
             rotate_secret(args.file, args.key, args.from_file)
+
+    elif args.command == "agent":
+        step_agent(args.hours)
 
     elif args.command == "seed":
         if not args.host or args.host == ROOT:
