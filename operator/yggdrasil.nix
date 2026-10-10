@@ -37,6 +37,10 @@
   # here would protect against no one, and would be one more secret to rotate.
   services.getty.autologinUser = "root";
 
+  # VS Code Remote-SSH (to root@yggdrasil, over Tailscale SSH) drops a generic
+  # Linux Node.js server here; nix-ld gives it the /lib64 loader NixOS lacks
+  programs.nix-ld.enable = true;
+
   # gh: `gh auth login` (browser code, like Tailscale) + `gh auth setup-git`
   # lets git push the clone over HTTPS — no SSH key to keep for GitHub
   environment.systemPackages = with pkgs; [ git gh zstd ];
