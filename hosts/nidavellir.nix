@@ -3,6 +3,7 @@
   imports = [
     ../share/services/vaultwarden
     ../share/services/gitea
+    ../share/services/registry
   ];
 
   # Identity and static networking — no cloud-init involved, everything below

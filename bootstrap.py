@@ -67,6 +67,7 @@ ADMIN_KEY     = Path(os.environ.get("SOPS_AGE_KEY_FILE", AGE_DIR / "keys.txt"))
 ADMIN_KEY_AGE = SECRETS_DIR / "admin-key.age"
 SOPS_CONFIG   = REPO_ROOT / ".sops.yaml"
 VM_AGE_KEY    = "/var/lib/sops-nix/key.txt"
+REGISTRY_USER = "registrar"                     # your login on the registry
 
 # What Terraform needs between runs, kept next to the Proxmox it describes
 STATE_FILES = ["terraform.tfstate", "terraform.tfstate.backup", "images.auto.tfvars.json"]
@@ -477,16 +478,22 @@ def ask_secret(prompt):
 
 
 def rotate_console_password(proxmox, user):
-    """New console password for every VM user: hash it, store it, switch."""
-    print("\n═══ Rotate the console password ═══")
-    password = ask_secret("New console password")
-    hashed = subprocess.run(["mkpasswd", "--method=yescrypt", "--stdin"], input=password,
-                            check=True, capture_output=True, text=True).stdout.strip()
-    sops_set("common.yaml", "console_password", hashed)
+    """The one password you type: VM consoles and the registry share it.
+    Stored only as hashes — yescrypt for the consoles, bcrypt for the
+    registry (the only kind it accepts) — then switched onto the VMs."""
+    print("\n═══ Rotate the console + registry password ═══")
+    password = ask_secret("New password")
+
+    def hashed(method, *extra):
+        return subprocess.run(["mkpasswd", f"--method={method}", *extra, "--stdin"], input=password,
+                              check=True, capture_output=True, text=True).stdout.strip()
+
+    sops_set("common.yaml", "console_password", hashed("yescrypt"))
+    sops_set("common.yaml", "registry_htpasswd", f"{REGISTRY_USER}:{hashed('bcrypt', '--rounds=10')}")
     for h in deployed_hosts(proxmox):
         step_switch(h, user)
-    print("✔ Store the new password in Vaultwarden.")
-
+    print(f"✔ Consoles and the registry (user {REGISTRY_USER}) now take the new password — "
+          "store it in Vaultwarden.")
 
 def rotate_admin_passphrase():
     """Re-encrypt admin-key.age with a new passphrase (age asks for it)."""
@@ -667,7 +674,7 @@ def parse_args():
     # ── rotate ──
     rotate = sub.add_parser("rotate", help="Rotate keys, passwords and tokens")
     what = rotate.add_subparsers(dest="what", required=True)
-    what.add_parser("console-password", help="Console password of every VM user")
+    what.add_parser("console-password", help="The one password you type: VM consoles + registry")
     what.add_parser("admin-passphrase", help="Passphrase of admin-key.age")
     what.add_parser("admin-key", help="The sops admin key (all files get a new data key)")
     what.add_parser("host-key", help="The age key of --host")
