@@ -1,6 +1,9 @@
 { config, lib, pkgs, site, ... }:
 {
-  imports = [ ../share/services/vaultwarden ];
+  imports = [
+    ../share/services/vaultwarden
+    ../share/services/gitea
+  ];
 
   # Identity and static networking — no cloud-init involved, everything below
   # is baked into this host's own image at build time.
