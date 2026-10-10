@@ -13,8 +13,9 @@
   networking.hostName = "yggdrasil";
   proxmoxLXC.manageHostName = true;
 
-  # Tailscale, joined once by hand: `tailscale up` in the console prints a login
-  # link. No auth key in the image — the node's identity lives on the CT disk
+  # Tailscale, joined once by hand: `tailscale up --ssh` in the console prints a
+  # login link. Keep `--ssh` there: a bare `tailscale up` resets every pref,
+  # turning off the SSH that tailscaled-set enabled at boot. No auth key in the image — the node's identity lives on the CT disk
   # and in its backups. Needs /dev/net/tun passed into the CT (`create` does it).
   services.tailscale.enable = true;
 
