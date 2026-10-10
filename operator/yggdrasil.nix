@@ -2,11 +2,14 @@
 {
   # Yggdrasil — the root everything else grows from. An LXC with the kit in
   # /etc/nixos and the tools to rebuild the homelab from nothing; no secrets
-  # inside. After `pct enter <id>`, bring the admin key out of the kit:
-  #   mkdir -p ~/.config/sops/age
-  #   age -d -o ~/.config/sops/age/keys.txt /etc/nixos/share/secrets/admin-key.age
-  #   cp -r /etc/nixos ~/homelab && chmod -R u+w ~/homelab && cd ~/homelab
-  #   python3 bootstrap.py --proxmox <proxmox-ip> …
+  # inside. To administer from here (`ssh root@yggdrasil`, Tailscale SSH):
+  #   git clone https://github.com/<you>/yggdrasil-homelab ~/homelab && cd ~/homelab
+  #   cp /etc/nixos/site.json .                                   # gitignored, but in the kit
+  #   cp /etc/nixos/share/secrets/admin-key.age share/secrets/    # same — or from the NAS kit
+  #   mkdir -p ~/.config/sops/age && age -d -o ~/.config/sops/age/keys.txt share/secrets/admin-key.age
+  #   python3 bootstrap.py …
+  # Both copies matter: a kit built from a clone without them (including this
+  # machine's own /etc/nixos after a switch from the clone) would lack them.
   imports = [ "${modulesPath}/virtualisation/proxmox-lxc.nix" ];
 
   # Proxmox hands over the network (systemd-networkd); the name stays ours
