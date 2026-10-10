@@ -48,6 +48,21 @@ if not SITE_FILE.exists():
     sys.exit(f"✕ {SITE_FILE} not found — copy site.example.json to site.json and fill in your values.")
 SITE = json.loads(SITE_FILE.read_text())
 
+# site.json is gitignored, so a copy on another machine falls behind when a
+# field is added — say which ones, instead of letting Nix fail deep inside
+def _missing(example, actual, prefix=""):
+    for key, value in example.items():
+        if key.startswith("_"):
+            continue
+        if key not in actual:
+            yield prefix + key
+        elif isinstance(value, dict) and isinstance(actual[key], dict) and key != "hosts":
+            yield from _missing(value, actual[key], f"{prefix}{key}.")
+
+_example = REPO_ROOT / "site.example.json"
+if _example.exists() and (missing := list(_missing(json.loads(_example.read_text()), SITE))):
+    sys.exit(f"✕ site.json lacks {', '.join(missing)} — add them (see site.example.json).")
+
 HOSTS = sorted(p.stem for p in (REPO_ROOT / "hosts").glob("*.nix"))
 ROOT  = "yggdrasil"   # operator/yggdrasil.nix: the root LXC, build-only (no qcow2/terraform/switch)
 
