@@ -9,6 +9,7 @@ Nix and the sops admin age key (~/.config/sops/age/keys.txt).
                               (--host yggdrasil: the root LXC template, for `pct create`)
   init    [--apply|--destroy] terraform, with its state kept on the Proxmox host
   switch                      build here, copy over SSH, activate on the running VM
+  seed    <service>           copy share/services/<service>/data to the VM, once
   clean   [--archives] [--images] [--store] [--all]
   create  | backup | restore [--from <file>]   (--host yggdrasil only)
                               the root LXC is never Terraform's: created here,
@@ -255,6 +256,45 @@ def step_switch(host, user):
     ssh(target, f"sudo nix-env -p /nix/var/nix/profiles/system --set {toplevel} && "
                 f"sudo systemd-run --collect --no-ask-password --pipe --quiet --service-type=exec "
                 f"--unit=bootstrap-switch-to-configuration {toplevel}/bin/switch-to-configuration switch")
+
+def step_seed(host, service, user):
+    """Copy a service's data straight to the VM, once, before its first switch.
+
+    Never through the kit: data carries secrets of its own (keys, tokens,
+    private repos), and the kit lands in the world-readable store and on the
+    NAS. Ownership and modes are kept as they are — after a migration that's
+    what the container image expects."""
+    print(f"\n═══ Seed {service} on {host} ═══")
+    src = REPO_ROOT / "share" / "services" / service / "data"
+    if not src.is_dir():
+        sys.exit(f"✕ No {src.relative_to(REPO_ROOT)} to copy.")
+
+    declared = json.loads(subprocess.run(
+        ["nix", "eval", "--json", f"{FLAKE}#nixosConfigurations.{host}.config.homelab.services",
+         "--apply", f's: s."{service}" or null'],
+        cwd=REPO_ROOT, check=True, capture_output=True, text=True).stdout)
+    if declared is None:
+        sys.exit(f"✕ {host} doesn't declare homelab.services.{service} — import its module in hosts/{host}.nix first.")
+
+    target = f"{user or vm_user(host)}@{host}"
+    dst    = f"/var/lib/services/{service}"
+    if subprocess.run(["ssh", *ssh_opts(), target, f"sudo test -e {dst}"]).returncode == 0:
+        sys.exit(f"✕ {dst} already exists on {host}. seed only fills an empty spot — "
+                 "remove it by hand if you really mean to replace the data.")
+
+    # Into a temporary directory first, renamed only once everything arrived
+    tmp    = f"/var/lib/services/.{service}.seed"
+    chown  = f"sudo chown -R {declared['owner']} {tmp} && " if declared.get("owner") else ""
+    reader = ([] if os.geteuid() == 0 else ["sudo", "-n"]) + ["tar", "-C", str(src), "--numeric-owner", "-cf", "-", "."]
+    tar = subprocess.Popen(reader, stdout=subprocess.PIPE)
+    ssh(target, f"sudo rm -rf {tmp} && sudo mkdir -p {tmp} && sudo tar -C {tmp} --numeric-owner -xpf - && "
+                f"{chown}sudo mv {tmp} {dst}", stdin=tar.stdout)
+    tar.stdout.close()
+    if tar.wait() != 0:
+        sys.exit("✕ Reading the local data failed.")
+    size = ssh(target, f"sudo du -sh {dst}", capture_output=True, text=True).stdout.split()[0]
+    print(f"✔ {service} data is on {host} ({size}). Now `switch` to start it.")
+
 
 def step_clean(host, proxmox, archives, images, store):
     """Remove what build left behind, locally and on the Proxmox host/NAS."""
@@ -608,6 +648,10 @@ def parse_args():
     # ── switch ──
     sub.add_parser("switch", help="Build, copy and activate the config on the running VM")
 
+    # ── seed ──
+    seed = sub.add_parser("seed", help="Copy a service's data to --host, once, before its first switch")
+    seed.add_argument("service", help="e.g. gitea — copies share/services/gitea/data")
+
     # ── init ──
     init = sub.add_parser("init", help="Initialize or destroy infrastructure")
     init.add_argument("--apply", action="store_true", help="Terraform apply")
@@ -692,6 +736,11 @@ def main():
             rotate_ssh_key(args.proxmox, args.user)
         elif args.what == "secret":
             rotate_secret(args.file, args.key, args.from_file)
+
+    elif args.command == "seed":
+        if not args.host or args.host == ROOT:
+            sys.exit("✕ seed needs --host <vm>.")
+        step_seed(args.host, args.service, args.user)
 
     elif args.command == "switch":
         for h in hosts:

@@ -1,10 +1,8 @@
 { config, lib, pkgs, ... }:
 {
-  # Initial data, copied once into /var/lib/services/qdrant on first boot.
-  # Only present in the archive of the host that runs qdrant, so null elsewhere.
-  # Stop the live container (or use a qdrant snapshot) before building a
-  # template you intend to keep — ./data is copied as-is.
-  homelab.services.qdrant.seed = if builtins.pathExists ./data then ./data else null;
+  # Data in /var/lib/services/qdrant, copied once by `bootstrap.py seed` —
+  # stop the live container (or use a qdrant snapshot) first.
+  homelab.services.qdrant = { };
 
   # Configure Docker Container for qDrant
   virtualisation.docker.enable = true;
@@ -12,13 +10,16 @@
   virtualisation.oci-containers.containers.qdrant = {
     image = "qdrant/qdrant:v1.18.2";
     volumes = [ "/var/lib/services/qdrant:/qdrant/storage" ];
-    ports = [ "6333:6333" "6334:6334" ];
-    # The firewall (heimdall.nix) already restricts inbound to tailscale0, so
-    # binding wide here is fine, unlike the 127.0.0.1-only + Tailscale Serve
-    # setup on the old Debian host. API key decrypted by sops-nix at boot from
-    # share/secrets/<hostname>.yaml.
+    ports = [ "127.0.0.1:6333:6333" "127.0.0.1:6334:6334" ];
+    # API key decrypted by sops-nix at boot from share/secrets/<hostname>.yaml.
     environmentFiles = [ config.sops.secrets.qdrant_env.path ];
   };
+
+  # Reached only through Tailscale Serve: REST over HTTPS, gRPC as raw TCP.
+  # (Bound to 127.0.0.1 — a port Docker publishes on 0.0.0.0 bypasses the
+  # NixOS firewall; until 2026-10-10 this one answered on the LAN.)
+  homelab.heimdall.serve."6333" = "http://127.0.0.1:6333";
+  homelab.heimdall.serve."tcp:6334" = "tcp://127.0.0.1:6334";
 
   sops.secrets.qdrant_env = { };
 }

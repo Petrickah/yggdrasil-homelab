@@ -4,48 +4,43 @@ let
   fs   = lib.fileset;
   root = ../.;
 
-  # Services that ship initial data with this host (seed = null is skipped)
-  seeds = lib.filterAttrs (_: svc: svc.seed != null) config.homelab.services;
-
   # Every share/services/<name>/data directory, for any host
   serviceDirs = lib.attrNames (lib.filterAttrs (_: type: type == "directory") (builtins.readDir ../share/services));
   dataDirs    = map (name: fs.maybeMissing (../share/services + "/${name}/data")) serviceDirs;
   authDirs    = map (name: fs.maybeMissing (../share/services + "/${name}/auth")) serviceDirs;
 
   # The infrastructure kit: every host, every module, Terraform, scripts and the
-  # encrypted secrets — never plaintext secrets, state or build results.
-  # Only *this* host's service data is added back, so it can be seeded on boot.
+  # encrypted secrets — never service data, plaintext secrets, state or build
+  # results. Data holds secrets of its own (keys, tokens, private repos), and the
+  # kit ends up in the world-readable store and on the NAS: data goes straight
+  # to the VM instead (`bootstrap.py seed`).
   flakeSource = fs.toSource {
     inherit root;
-    fileset = fs.unions ([
-      (fs.difference root (fs.unions ([
-        (fs.maybeMissing ../results)
-        (fs.maybeMissing ../__pycache__)
-        (fs.maybeMissing ../.git)
-        (fs.maybeMissing ../share/terraform/.terraform)
-        (fs.fileFilter (f: lib.hasPrefix "terraform.tfstate" f.name || lib.hasSuffix ".tfvars.json" f.name) ../share/terraform)
-        # Only encrypted files travel: sops' *.yaml and the passphrase-protected admin-key.age
-        (fs.fileFilter (f: !(f.hasExt "yaml" || f.hasExt "age")) ../share/secrets)
-        (fs.fileFilter (f: f.name == ".env") ../share/services)
-      ] ++ dataDirs ++ authDirs)))
-    ] ++ lib.mapAttrsToList (_: svc: svc.seed) seeds);
+    fileset = fs.difference root (fs.unions ([
+      (fs.maybeMissing ../results)
+      (fs.maybeMissing ../__pycache__)
+      (fs.maybeMissing ../.git)
+      (fs.maybeMissing ../share/terraform/.terraform)
+      (fs.fileFilter (f: lib.hasPrefix "terraform.tfstate" f.name || lib.hasSuffix ".tfvars.json" f.name) ../share/terraform)
+      # Only encrypted files travel: sops' *.yaml and the passphrase-protected admin-key.age
+      (fs.fileFilter (f: !(f.hasExt "yaml" || f.hasExt "age")) ../share/secrets)
+      (fs.fileFilter (f: f.name == ".env") ../share/services)
+    ] ++ dataDirs ++ authDirs));
   };
 in
 {
   options.homelab.services = lib.mkOption {
-    description = "Services whose initial data is copied once into /var/lib/services/<name>.";
+    description = ''
+      Services with data in /var/lib/services/<name> on this host. The data is
+      copied there once, from share/services/<name>/data, by `bootstrap.py seed`.
+    '';
     default     = { };
     type        = lib.types.attrsOf (lib.types.submodule {
       options = {
-        seed = lib.mkOption {
-          description = "Directory inside this repository with the initial data, or null.";
-          type        = lib.types.nullOr lib.types.path;
-          default     = null;
-        };
         owner = lib.mkOption {
-          description = "user:group that owns the copied data.";
-          type        = lib.types.str;
-          default     = "root:root";
+          description = "user:group to give the copied data; null keeps the source's own (what the image expects after a migration).";
+          type        = lib.types.nullOr lib.types.str;
+          default     = null;
         };
       };
     });
@@ -59,9 +54,6 @@ in
     nixpkgs.config.allowUnfreePredicate = pkg: builtins.elem (lib.getName pkg) [ "terraform" ];
     environment.systemPackages = with pkgs; [ terraform sops age python3 mkpasswd ];
     nix.settings.experimental-features = [ "nix-command" "flakes" ];
-
-    # For template.nix, which seeds service data straight out of the kit
-    system.build.kitSource = flakeSource;
 
     # Build via: nix build .#<hostname>-kit
     # Just the kit (/etc/nixos), for a machine that isn't one of the VMs:

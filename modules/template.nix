@@ -3,13 +3,6 @@ let
   host     = config.networking.hostName;
   toplevel = config.system.build.toplevel;
 
-  # Services that ship initial data with this host (seed = null is skipped)
-  seeds = lib.filterAttrs (_: svc: svc.seed != null) config.homelab.services;
-
-  # The seed is read back from the kit (kit.nix) rather than copied on its own,
-  # so the data exists only once in the store.
-  seedSource = svc: "${config.system.build.kitSource}/${lib.removePrefix "./" (lib.path.removePrefix ../. svc.seed)}";
-
   # A ready-made EFI System Partition: the same layout systemd-boot-builder.py
   # produces, so the first `nixos-rebuild switch` simply takes it over.
   efi = "${config.systemd.package}/lib/systemd/boot/efi/systemd-bootx64.efi";
@@ -45,25 +38,7 @@ in
   };
 
   config = {
-    # Copy each seed once; a service that already has data is never touched again
-    systemd.services = lib.mapAttrs' (name: svc: lib.nameValuePair "homelab-seed-${name}" {
-      description = "Seed /var/lib/services/${name} from the Nix store";
-      wantedBy    = [ "multi-user.target" ];
-      before      = [ "docker-${name}.service" ];
-      requiredBy  = lib.optional (config.virtualisation.oci-containers.containers ? ${name}) "docker-${name}.service";
-      unitConfig.ConditionPathExists = "!/var/lib/services/${name}";
-      # Its script changes with every kit (it points into it); restarting it on
-      # switch would do nothing but restart the container that Requires it.
-      restartIfChanged = false;
-      serviceConfig.Type = "oneshot";
-      script = ''
-        mkdir -p /var/lib/services
-        rm -rf /var/lib/services/.${name}.tmp
-        cp -r --no-preserve=mode,ownership ${seedSource svc} /var/lib/services/.${name}.tmp
-        chown -R ${svc.owner} /var/lib/services/.${name}.tmp
-        mv /var/lib/services/.${name}.tmp /var/lib/services/${name}
-      '';
-    }) seeds // {
+    systemd.services = {
       # The template's store has no Nix database yet — load it on first boot.
       # Same as nixpkgs' nixos/modules/virtualisation/proxmox-lxc.nix.
       register-nix-paths = {
