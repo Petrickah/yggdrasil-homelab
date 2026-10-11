@@ -5,10 +5,11 @@ A NixOS homelab on Proxmox VE, built so that **any single archive can rebuild th
 Each host is a NixOS configuration. One flake turns it into:
 
 - a **template** — a rootfs tarball of the whole VM (Nix closure, kernel, a ready-made EFI System Partition);
-- a **kit** — the sources alone (this repository's files, with secrets encrypted), which every VM also carries as `/etc/nixos`;
 - a small script that turns the template into a bootable **qcow2** on a plain Proxmox host — no Nix needed there.
 
-Terraform creates the VMs from those images; after that, VMs are updated in place with `nixos-rebuild switch`. **Yggdrasil**, a separate LXC template, is the root everything can be rebuilt from.
+Plus one **kit** for all of them — the sources alone (this repository's files, secrets encrypted), which every machine also carries as `/etc/nixos`.
+
+Terraform creates the VMs from those images; after that, `bootstrap.py switch` updates them in place. **Yggdrasil**, a separate LXC template, is the root everything can be rebuilt from.
 
 ```
 hosts/<host>.nix ─nix build─▶ template ─▶ NAS ─▶ mk-qcow2.sh on Proxmox ─▶ qcow2 ─▶ terraform ─▶ VM
@@ -19,7 +20,7 @@ hosts/<host>.nix ─nix build─▶ template ─▶ NAS ─▶ mk-qcow2.sh on Pr
 
 | Path | What it is |
 |---|---|
-| `flake.nix` | hosts, packages (`<host>-template`, `<host>-kit`, `<host>-mk-qcow2`, `yggdrasil-template`), dev shell |
+| `flake.nix` | hosts, packages (`<host>-template`, `<host>-mk-qcow2`, `yggdrasil-template`, `kit`), dev shell |
 | `hosts/` | one file per VM; `hosts/_parked/` is ignored by the flake |
 | `operator/yggdrasil.nix` | the root LXC (Proxmox `pct create`-able) |
 | `modules/` | `kit` (the `/etc/nixos` kit + operator tools), `template` (VM image, ESP, first-boot registration), `sops`, `proxmox` (hardware/boot), `heimdall` (network, firewall, Tailscale), `bifrost` (users, SSH) |

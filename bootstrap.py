@@ -2,10 +2,10 @@
 """Bootstrap pipeline orchestrator for NixOS homelab VMs.
 
 Runs the same from the vault, from /etc/nixos on any VM (copy it somewhere
-writable first) or from an extracted homelab-kit-*.tar.zst. All it needs is
+writable first) or from an extracted homelab-kit.tar.zst. All it needs is
 Nix and the sops admin age key (~/.config/sops/age/keys.txt).
 
-  build   [--image]           template + kit → NAS; --image also makes the qcow2
+  build   [--image]           the kit + host templates → NAS; --image also makes the qcow2
                               (--host yggdrasil: the root LXC template, for `pct create`)
   init    [--apply|--destroy] terraform, with its state kept on the Proxmox host
   switch                      build here, copy over SSH, activate on the running VM
@@ -132,9 +132,10 @@ def remote_exists(proxmox, path):
 
 
 def nix_build(host, output):
-    """Build .#<host>-<output> and return the store path of the result."""
-    link = RESULTS_DIR / f"{host}-{output}"
-    run(["nix", "build", f"{FLAKE}#{host}-{output}", "--out-link", link], cwd=REPO_ROOT)
+    """Build .#<host>-<output> (or .#<output> with no host) and return the store path."""
+    attr = f"{host}-{output}" if host else output
+    link = RESULTS_DIR / attr
+    run(["nix", "build", f"{FLAKE}#{attr}", "--out-link", link], cwd=REPO_ROOT)
     return link.resolve()
 
 
@@ -177,15 +178,33 @@ def push_state(proxmox):
 
 # ── Steps ──────────────────────────────────────────────────────────────────
 
+def step_kit(proxmox):
+    """
+        Build the kit — the same for every machine — and upload it to the NAS:
+        a hashed copy plus a stable name to download in a disaster.
+    """
+    print("\n═══ Build the kit ═══")
+    kit    = nix_build(None, "kit")
+    hashed = f"homelab-kit-{short_hash(kit)}.tar.zst"
+    target = f"root@{proxmox}"
+    if remote_exists(proxmox, f"{PROXMOX_TEMPLATE_DIR}/{hashed}"):
+        print(f"✔ {hashed} already on the NAS.")
+    else:
+        scp(kit, f"{target}:{PROXMOX_TEMPLATE_DIR}/{hashed}")
+    # scp keeps the store's read-only mode, and the NAS won't let root overwrite
+    # that, so replace the stable name instead and make everything writable again
+    ssh(target, f"cd {PROXMOX_TEMPLATE_DIR} && rm -f homelab-kit.tar.zst && "
+                f"cp {hashed} homelab-kit.tar.zst && chmod 644 {hashed} homelab-kit.tar.zst")
+
+
 def step_build(host, proxmox, build_image):
     """
-        Build the template + kit and upload both to the NAS (through the
+        Build the host's template and upload it to the NAS (through the
         Proxmox host's syno-nfs mount). With --image, also turn the template
         into a qcow2 in local:import and record it for Terraform.
     """
-    print(f"\n═══ Build template + kit for {host} ═══")
+    print(f"\n═══ Build template for {host} ═══")
     tarball  = next((nix_build(host, "template") / "tarball").glob("*.tar.*"))
-    kit      = nix_build(host, "kit")
     template = template_name(host, tarball)
     target   = f"root@{proxmox}"
 
@@ -194,14 +213,7 @@ def step_build(host, proxmox, build_image):
     else:
         scp(tarball, f"{target}:{PROXMOX_TEMPLATE_DIR}/{template}")
 
-    # The kit is tiny: keep a hashed copy plus a stable name to download in a disaster.
-    # scp keeps the store's read-only mode, and the NAS won't let root overwrite
-    # that, so replace the stable name instead and make everything writable again.
-    kit_hashed = f"homelab-kit-{host}-{short_hash(kit)}.tar.zst"
-    scp(kit, f"{target}:{PROXMOX_TEMPLATE_DIR}/{kit_hashed}")
-    ssh(target, f"cd {PROXMOX_TEMPLATE_DIR} && rm -f homelab-kit-{host}.tar.zst && "
-                f"cp {kit_hashed} homelab-kit-{host}.tar.zst && "
-                f"chmod 644 {template} {kit_hashed} homelab-kit-{host}.tar.zst")
+    ssh(target, f"chmod 644 {PROXMOX_TEMPLATE_DIR}/{template}")
 
     if not build_image:
         return
@@ -341,12 +353,17 @@ def step_clean(host, proxmox, archives, images, store):
     """Remove what build left behind, locally and on the Proxmox host/NAS."""
     target = f"root@{proxmox}"
 
-    if archives:
-        print(f"\n═══ Clean template + kit for {host} ═══")
+    if archives and host is None:
+        # The kit is shared by every machine: only cleaned when no --host is given
+        print("\n═══ Clean the kit ═══")
+        (RESULTS_DIR / "kit").unlink(missing_ok=True)
+        ssh(target, f"rm -f {PROXMOX_TEMPLATE_DIR}/homelab-kit*.tar.zst")
+    elif archives:
+        print(f"\n═══ Clean template for {host} ═══")
         for output in ["template", "kit", "mk-qcow2"]:
             (RESULTS_DIR / f"{host}-{output}").unlink(missing_ok=True)
-        ssh(target, f"rm -f {PROXMOX_TEMPLATE_DIR}/vztmpl-nixos-{host}-*.tar.zst "
-                    f"{PROXMOX_TEMPLATE_DIR}/homelab-kit-{host}*.tar.zst")
+        ssh(target, f"rm -f {PROXMOX_TEMPLATE_DIR}/vztmpl-nixos-{host}-*.tar.* "
+                    f"{PROXMOX_TEMPLATE_DIR}/homelab-kit-{host}*.tar.zst")   # per-host kits from before 2026-10-11
 
     if images:
         # A VM keeps its own copy of the disk once imported; the qcow2 is spare
@@ -752,6 +769,7 @@ def main():
         sys.exit(f"✕ `{args.command}` is only for the root LXC: add --host {ROOT}.")
 
     if args.command == "build":
+        step_kit(args.proxmox)
         for h in hosts:
             step_build(h, args.proxmox, build_image=args.image)
 
@@ -759,6 +777,8 @@ def main():
         for h in hosts:
             step_clean(h, args.proxmox, archives=args.archives or args.all,
                        images=args.images or args.all, store=False)
+        if not args.host and (args.archives or args.all):
+            step_clean(None, args.proxmox, archives=True, images=False, store=False)
         if args.store or args.all:
             step_clean(None, args.proxmox, archives=False, images=False, store=True)
 
