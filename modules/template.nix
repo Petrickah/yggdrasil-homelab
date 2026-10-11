@@ -1,4 +1,6 @@
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, kitSource, ... }:
+# kitSource — the repository minus data, plaintext secrets, state and build
+# results — is defined once in flake.nix; every machine carries the same one.
 let
   host     = config.networking.hostName;
   toplevel = config.system.build.toplevel;
@@ -35,61 +37,92 @@ in
       type        = lib.types.str;
       default     = "8G";
     };
+    services = lib.mkOption {
+      description = ''
+        Services with data in /var/lib/services/<name> on this host. The data is
+        copied there once, from share/services/<name>/data, by `bootstrap.py seed`.
+      '';
+      default     = { };
+      type        = lib.types.attrsOf (lib.types.submodule {
+        options = {
+          owner = lib.mkOption {
+            description = "user:group to give the copied data; null keeps the source's own (what the image expects after a migration).";
+            type        = lib.types.nullOr lib.types.str;
+            default     = null;
+          };
+        };
+      });
+    };
   };
 
-  config = {
-    systemd.services = {
-      # The template's store has no Nix database yet — load it on first boot.
-      # Same as nixpkgs' nixos/modules/virtualisation/proxmox-lxc.nix.
-      register-nix-paths = {
-        description = "Register Nix store paths shipped in the template";
-        unitConfig  = {
-          DefaultDependencies = false;
-          ConditionPathExists = "/nix-path-registration";
+  config = lib.mkMerge [
+    # Every machine, VMs and containers alike
+    {
+      # /etc/nixos is a read-only symlink into the store, updated on every switch
+      environment.etc."nixos".source = kitSource;
+
+      # Operator tools, so any machine built from here can bring up the others
+      nixpkgs.config.allowUnfreePredicate = pkg: builtins.elem (lib.getName pkg) [ "terraform" ];
+      environment.systemPackages = with pkgs; [ terraform sops age python3 mkpasswd ];
+      nix.settings.experimental-features = [ "nix-command" "flakes" ];
+    }
+
+    # VMs only: a container (Yggdrasil) has no kernel or ESP, and its
+    # proxmox-lxc module already registers the store paths on first boot
+    (lib.mkIf (!config.boot.isContainer) {
+      systemd.services = {
+        # The template's store has no Nix database yet — load it on first boot.
+        # Same as nixpkgs' nixos/modules/virtualisation/proxmox-lxc.nix.
+        register-nix-paths = {
+          description = "Register Nix store paths shipped in the template";
+          unitConfig  = {
+            DefaultDependencies = false;
+            ConditionPathExists = "/nix-path-registration";
+          };
+          wantedBy  = [ "sysinit.target" ];
+          before    = [ "sysinit.target" "shutdown.target" "nix-daemon.socket" "nix-daemon.service" ];
+          after     = [ "local-fs.target" ];
+          conflicts = [ "shutdown.target" ];
+          restartIfChanged = false;
+          serviceConfig = {
+            Type            = "oneshot";
+            RemainAfterExit = true;
+          };
+          script = ''
+            ${lib.getExe' config.nix.package.out "nix-store"} --load-db < /nix-path-registration
+            rm /nix-path-registration
+
+            # nixos-rebuild also requires a "system" profile
+            ${lib.getExe' config.nix.package.out "nix-env"} -p /nix/var/nix/profiles/system --set /run/current-system
+          '';
         };
-        wantedBy  = [ "sysinit.target" ];
-        before    = [ "sysinit.target" "shutdown.target" "nix-daemon.socket" "nix-daemon.service" ];
-        after     = [ "local-fs.target" ];
-        conflicts = [ "shutdown.target" ];
-        restartIfChanged = false;
-        serviceConfig = {
-          Type            = "oneshot";
-          RemainAfterExit = true;
+      };
+
+      # Build via: nix build .#<hostname>-template
+      system.build.template = pkgs.callPackage "${pkgs.path}/nixos/lib/make-system-tarball.nix" {
+        fileName      = "vztmpl-nixos-${host}";
+        storeContents = [{ object = toplevel; symlink = "none"; }];
+        contents      = [
+          { source = "${toplevel}/init"; target = "/sbin/init"; }
+          { source = esp;                target = "/boot"; }
+        ];
+        compressCommand      = "zstd -T0 -12";
+        compressionExtension = ".zst";
+        extraInputs          = [ pkgs.zstd ];
+      };
+
+      # Build via: nix build .#<hostname>-mk-qcow2
+      system.build.mkQcow2 = pkgs.replaceVarsWith {
+        src          = ../share/scripts/mk-qcow2.sh;
+        isExecutable = true;
+        # Keep `#!/usr/bin/env bash`: it runs on Proxmox, which has no /nix/store bash
+        dontPatchShebangs = true;
+        replacements = {
+          espLabel  = label "/boot";
+          rootLabel = label "/";
+          diskSize  = config.homelab.template.diskSize;
         };
-        script = ''
-          ${lib.getExe' config.nix.package.out "nix-store"} --load-db < /nix-path-registration
-          rm /nix-path-registration
-
-          # nixos-rebuild also requires a "system" profile
-          ${lib.getExe' config.nix.package.out "nix-env"} -p /nix/var/nix/profiles/system --set /run/current-system
-        '';
       };
-    };
-
-    # Build via: nix build .#<hostname>-template
-    system.build.template = pkgs.callPackage "${pkgs.path}/nixos/lib/make-system-tarball.nix" {
-      fileName      = "vztmpl-nixos-${host}";
-      storeContents = [{ object = toplevel; symlink = "none"; }];
-      contents      = [
-        { source = "${toplevel}/init"; target = "/sbin/init"; }
-        { source = esp;                target = "/boot"; }
-      ];
-      compressCommand      = "zstd -T0 -12";
-      compressionExtension = ".zst";
-      extraInputs          = [ pkgs.zstd ];
-    };
-
-    # Build via: nix build .#<hostname>-mk-qcow2
-    system.build.mkQcow2 = pkgs.replaceVarsWith {
-      src          = ../share/scripts/mk-qcow2.sh;
-      isExecutable = true;
-      # Keep `#!/usr/bin/env bash`: it runs on Proxmox, which has no /nix/store bash
-      dontPatchShebangs = true;
-      replacements = {
-        espLabel  = label "/boot";
-        rootLabel = label "/";
-        diskSize  = config.homelab.template.diskSize;
-      };
-    };
-  };
+    })
+  ];
 }

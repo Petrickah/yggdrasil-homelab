@@ -23,8 +23,8 @@ hosts/<host>.nix ─nix build─▶ template ─▶ NAS ─▶ mk-qcow2.sh on Pr
 | `flake.nix` | hosts, packages (`<host>-template`, `<host>-mk-qcow2`, `yggdrasil-template`, `kit`), dev shell |
 | `hosts/` | one file per VM; `hosts/_parked/` is ignored by the flake |
 | `operator/yggdrasil.nix` | the root LXC (Proxmox `pct create`-able) |
-| `modules/` | `kit` (the `/etc/nixos` kit + operator tools), `template` (VM image, ESP, first-boot registration), `sops`, `proxmox` (hardware/boot), `heimdall` (network, firewall, Tailscale), `bifrost` (users, SSH) |
-| `share/services/<name>/default.nix` | a service as a NixOS module, with optional seed data copied once on first boot |
+| `modules/` | `template` (every machine: the `/etc/nixos` kit + operator tools; VMs only: image, ESP, first-boot registration), `sops`, `proxmox` (hardware/boot), `heimdall` (network, firewall, Tailscale Serve), `bifrost` (users, SSH) |
+| `share/services/<name>/default.nix` | a service as a NixOS module; its data goes to the VM once with `bootstrap.py seed`, never through the kit |
 | `share/terraform/` | Proxmox VMs (bpg/proxmox), credentials read from sops at run time |
 | `share/secrets/` | sops-encrypted secrets; rules in `.sops.yaml` |
 | `share/scripts/mk-qcow2.sh` | template → qcow2, plain bash |
