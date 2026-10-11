@@ -12,6 +12,7 @@ Nix and the sops admin age key (~/.config/sops/age/keys.txt).
   seed    <service>           copy share/services/<service>/data to the VM, once
   agent   [--hours N]         load the homelab SSH key into your ssh-agent, from sops
   ssh     [command…]          log into --host as its own user (or run one command)
+  secrets list | show <file> [key] | edit <file> | set <file> <key> [--from-file F]
   clean   [--archives] [--images] [--store] [--all]
   create  | backup | restore [--from <file>]   (--host yggdrasil only)
                               the root LXC is never Terraform's: created here,
@@ -336,6 +337,45 @@ def step_ssh(host, user, command):
         target, opts = f"{user or vm_user(host)}@{host}", ssh_opts()
     # Not exec: the temporary key file has to be cleaned up when ssh returns
     sys.exit(subprocess.run(["ssh", *opts, *([] if command else ["-t"]), target, *command]).returncode)
+
+
+def secret_file(name):
+    """share/secrets/<name>, accepting `mimisbrunnr`, `mimisbrunnr.yaml` or a path."""
+    path = SECRETS_DIR / Path(name).name
+    if path.suffix != ".yaml":
+        path = path.with_suffix(".yaml")
+    return path
+
+
+def step_secrets(action, file, key, from_file):
+    """Read and edit the sops files without calling sops by hand."""
+    if action == "list":
+        # Key names are stored in clear; only their values are encrypted
+        for path in sorted(SECRETS_DIR.glob("*.yaml")):
+            keys = [l.split(":")[0] for l in path.read_text().splitlines()
+                    if l and not l[0].isspace() and ":" in l and not l.startswith(("sops:", "#"))]
+            print(f"{path.name:20} {', '.join(keys)}")
+        return
+
+    path = secret_file(file or "")
+    if action != "set" and not path.exists():
+        sys.exit(f"✕ No {path.relative_to(REPO_ROOT)} (see `secrets list`).")
+
+    if action == "show":
+        args = ["sops", "--decrypt"] + (["--extract", f'["{key}"]'] if key else []) + [str(path)]
+        subprocess.run(args, check=True)
+    elif action == "edit":
+        # sops decrypts into a temp file, opens the editor and re-encrypts on save;
+        # in a VS Code terminal that editor is VS Code itself
+        env = dict(os.environ)
+        if "EDITOR" not in env and shutil.which("code"):
+            env["EDITOR"] = "code --wait"
+        subprocess.run(["sops", str(path)], check=True, env=env)
+        print(f"✔ {path.name} saved and encrypted again. `switch` the hosts that use it.")
+    elif action == "set":
+        if not key:
+            sys.exit("✕ secrets set needs <file> <key>.")
+        rotate_secret(path.name, key, from_file)
 
 
 def step_agent(hours):
@@ -722,6 +762,13 @@ def parse_args():
     ssh_cmd = sub.add_parser("ssh", help="Log into --host as its own user, or run one command there")
     ssh_cmd.add_argument("remote", nargs=argparse.REMAINDER, help="Optional command to run instead of a shell")
 
+    # ── secrets ──
+    secrets = sub.add_parser("secrets", help="List, read or edit the sops files")
+    secrets.add_argument("action", choices=["list", "show", "edit", "set"])
+    secrets.add_argument("file", nargs="?", help="e.g. mimisbrunnr (or mimisbrunnr.yaml)")
+    secrets.add_argument("key", nargs="?", help="show/set: one key, e.g. hermes_env")
+    secrets.add_argument("--from-file", help="set: read the value from this file (e.g. a whole .env)")
+
     # ── seed ──
     seed = sub.add_parser("seed", help="Copy a service's data to --host, once, before its first switch")
     seed.add_argument("service", help="e.g. gitea — copies share/services/gitea/data")
@@ -818,6 +865,11 @@ def main():
         if not args.host:
             sys.exit("✕ ssh needs --host <vm> (or --host yggdrasil).")
         step_ssh(args.host, args.user, args.remote)
+
+    elif args.command == "secrets":
+        if args.action != "list" and not args.file:
+            sys.exit(f"✕ secrets {args.action} needs a file — see `secrets list`.")
+        step_secrets(args.action, args.file, args.key, args.from_file)
 
     elif args.command == "agent":
         step_agent(args.hours)
