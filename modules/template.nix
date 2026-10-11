@@ -32,6 +32,11 @@ let
 in
 {
   options.homelab = {
+    unfree = lib.mkOption {
+      description = "Names of unfree packages allowed on this machine; each module adds its own.";
+      type        = lib.types.listOf lib.types.str;
+      default     = [ ];
+    };
     template.diskSize = lib.mkOption {
       description = "Size of the raw disk mk-qcow2.sh creates; Proxmox grows it on import.";
       type        = lib.types.str;
@@ -62,7 +67,8 @@ in
       environment.etc."nixos".source = kitSource;
 
       # Operator tools, so any machine built from here can bring up the others
-      nixpkgs.config.allowUnfreePredicate = pkg: builtins.elem (lib.getName pkg) [ "terraform" ];
+      homelab.unfree = [ "terraform" ];
+      nixpkgs.config.allowUnfreePredicate = pkg: builtins.elem (lib.getName pkg) config.homelab.unfree;
       environment.systemPackages = with pkgs; [ terraform sops age python3 mkpasswd ];
       nix.settings.experimental-features = [ "nix-command" "flakes" ];
     }

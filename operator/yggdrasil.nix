@@ -6,9 +6,10 @@
   #   git clone https://github.com/<you>/yggdrasil-homelab ~/homelab && cd ~/homelab
   #   cp /etc/nixos/site.json .                                   # gitignored, but in the kit
   #   cp /etc/nixos/share/secrets/admin-key.age share/secrets/    # same — or from the NAS kit
+  #   cp /etc/nixos/share/services/hermes/mind-vault.nix share/services/hermes/   # same
   #   mkdir -p ~/.config/sops/age && age -d -o ~/.config/sops/age/keys.txt share/secrets/admin-key.age
   #   python3 bootstrap.py …
-  # Both copies matter: a kit built from a clone without them (including this
+  # Every copy matters: a kit built from a clone without them (including this
   # machine's own /etc/nixos after a switch from the clone) would lack them.
   imports = [ "${modulesPath}/virtualisation/proxmox-lxc.nix" ];
 

@@ -19,6 +19,10 @@ share/secrets/*
 # This installation's addresses and hosts — copy site.example.json
 site.json
 
+# Personal text about the owner (mind-vault's instructions); optional, the
+# hermes module imports it only when present
+share/services/hermes/mind-vault.nix
+
 # Kept in the private vault only: project notes, AI agent directives, and the
 # legacy Docker Compose setup on the old single VM (retired after migration)
 share/notes/
@@ -26,7 +30,7 @@ CLAUDE.md
 _habitat.md
 share/services/*/compose.yml
 share/services/registry/cleanup-old-tags.py
-share/services/hermes-terminal/
+share/services/hermes-terminal/Dockerfile
 share/services/dump-server/
 share/scripts/backup.sh
 share/scripts/status.sh

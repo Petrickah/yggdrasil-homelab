@@ -32,6 +32,12 @@
       "address": "10.0.10.2"
     }
   },
+  "syncthing": {
+    "hermes-agent" : {
+      "id": "W77DXXX-XXXXXXX-...",
+      "address": "tcp://100.x.x.x:22000"
+    }
+  },
   "yggdrasil": {
     "ctid": 100,
     "address": "10.0.10.29",
