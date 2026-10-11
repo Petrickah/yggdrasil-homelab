@@ -27,8 +27,8 @@ module "mimisbrunnr" {
   node_name = local.proxmox_node
   hostname  = "mimisbrunnr"
   vm_id     = 200
-  cores     = 2
-  memory    = 4096
+  cores     = 4
+  memory    = 8192
   disk_size = 128
   disk_file = lookup(var.images, "mimisbrunnr", "")
 }
