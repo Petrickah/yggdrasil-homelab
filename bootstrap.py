@@ -11,6 +11,7 @@ Nix and the sops admin age key (~/.config/sops/age/keys.txt).
   switch                      build here, copy over SSH, activate on the running VM
   seed    <service>           copy share/services/<service>/data to the VM, once
   agent   [--hours N]         load the homelab SSH key into your ssh-agent, from sops
+  ssh     [command…]          log into --host as its own user (or run one command)
   clean   [--archives] [--images] [--store] [--all]
   create  | backup | restore [--from <file>]   (--host yggdrasil only)
                               the root LXC is never Terraform's: created here,
@@ -311,6 +312,18 @@ def step_seed(host, service, user):
         sys.exit("✕ Reading the local data failed.")
     size = ssh(target, f"sudo du -sh {dst}", capture_output=True, text=True).stdout.split()[0]
     print(f"✔ {service} data is on {host} ({size}). Now `switch` to start it.")
+
+
+def step_ssh(host, user, command):
+    """Log into a VM as the user its config defines, with the homelab key from
+    sops — no agent needed, no user names to remember. Yggdrasil goes through
+    Tailscale SSH as root instead, with no key at all."""
+    if host == ROOT:
+        target, opts = f"root@{ROOT}", []
+    else:
+        target, opts = f"{user or vm_user(host)}@{host}", ssh_opts()
+    # Not exec: the temporary key file has to be cleaned up when ssh returns
+    sys.exit(subprocess.run(["ssh", *opts, *([] if command else ["-t"]), target, *command]).returncode)
 
 
 def step_agent(hours):
@@ -688,6 +701,10 @@ def parse_args():
     agent = sub.add_parser("agent", help="Load the homelab SSH key into your ssh-agent, from sops")
     agent.add_argument("--hours", type=int, default=8, help="How long the agent keeps it (default 8)")
 
+    # ── ssh ──
+    ssh_cmd = sub.add_parser("ssh", help="Log into --host as its own user, or run one command there")
+    ssh_cmd.add_argument("remote", nargs=argparse.REMAINDER, help="Optional command to run instead of a shell")
+
     # ── seed ──
     seed = sub.add_parser("seed", help="Copy a service's data to --host, once, before its first switch")
     seed.add_argument("service", help="e.g. gitea — copies share/services/gitea/data")
@@ -776,6 +793,11 @@ def main():
             rotate_ssh_key(args.proxmox, args.user)
         elif args.what == "secret":
             rotate_secret(args.file, args.key, args.from_file)
+
+    elif args.command == "ssh":
+        if not args.host:
+            sys.exit("✕ ssh needs --host <vm> (or --host yggdrasil).")
+        step_ssh(args.host, args.user, args.remote)
 
     elif args.command == "agent":
         step_agent(args.hours)
