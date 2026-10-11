@@ -149,12 +149,19 @@ def template_name(host, tarball):
     return f"vztmpl-nixos-{host}-{short_hash(tarball)}{''.join(tarball.suffixes[-2:])}"
 
 
+def nix_eval_json(attr, apply=None):
+    """nix eval --json on the flake; on failure show Nix's own error, not a traceback."""
+    args = ["nix", "eval", "--json", f"{FLAKE}#{attr}"] + (["--apply", apply] if apply else [])
+    result = subprocess.run(args, cwd=REPO_ROOT, capture_output=True, text=True)
+    if result.returncode != 0:
+        errors = [l for l in result.stderr.splitlines() if not l.startswith("warning:")]
+        sys.exit("✕ Nix couldn't evaluate the configuration:\n" + "\n".join(errors[-25:]))
+    return json.loads(result.stdout)
+
+
 def vm_user(host):
     """First user bifrost.nix defines for the host."""
-    out = subprocess.run(["nix", "eval", "--json", f"{FLAKE}#nixosConfigurations.{host}.config.homelab.bifrost.users",
-                          "--apply", "builtins.attrNames"], cwd=REPO_ROOT, check=True,
-                         capture_output=True, text=True).stdout
-    return json.loads(out)[0]
+    return nix_eval_json(f"nixosConfigurations.{host}.config.homelab.bifrost.users", "builtins.attrNames")[0]
 
 
 # ── Terraform state on the Proxmox host ────────────────────────────────────
@@ -300,10 +307,7 @@ def step_seed(host, service, user):
     if not src.is_dir():
         sys.exit(f"✕ No {src.relative_to(REPO_ROOT)} to copy.")
 
-    declared = json.loads(subprocess.run(
-        ["nix", "eval", "--json", f"{FLAKE}#nixosConfigurations.{host}.config.homelab.services",
-         "--apply", f's: s."{service}" or null'],
-        cwd=REPO_ROOT, check=True, capture_output=True, text=True).stdout)
+    declared = nix_eval_json(f"nixosConfigurations.{host}.config.homelab.services", f's: s."{service}" or null')
     if declared is None:
         sys.exit(f"✕ {host} doesn't declare homelab.services.{service} — import its module in hosts/{host}.nix first.")
 
