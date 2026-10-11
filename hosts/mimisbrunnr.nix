@@ -1,6 +1,7 @@
 { config, lib, pkgs, site, ... }:
 {
   imports = [
+    ../share/services/hermes
     ../share/services/qdrant
   ];
 

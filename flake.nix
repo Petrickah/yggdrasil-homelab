@@ -3,6 +3,7 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+    hermes-agent.url = "github:NousResearch/hermes-agent";
     sops-nix = {
       url = "github:Mic92/sops-nix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -10,7 +11,7 @@
   };
 
   outputs =
-    { self, nixpkgs, sops-nix, ... }:
+    { self, nixpkgs, sops-nix, hermes-agent, ... }:
     let
       system = "x86_64-linux";
       lib    = nixpkgs.lib;
@@ -56,13 +57,12 @@
 
       mkHost = hostname: lib.nixosSystem {
         inherit system;
-        specialArgs = { inherit site kitSource; };
+        specialArgs = { inherit site kitSource hermes-agent; };
         modules = [
           ./hosts/${hostname}.nix
           ./modules/proxmox.nix
           ./modules/heimdall.nix
           ./modules/bifrost.nix
-          ./modules/kit.nix
           ./modules/template.nix
           ./modules/sops.nix
           sops-nix.nixosModules.sops
@@ -76,7 +76,7 @@
       yggdrasil = lib.nixosSystem {
         inherit system;
         specialArgs = { inherit site kitSource; };
-        modules = [ ./operator/yggdrasil.nix ./modules/kit.nix ];
+        modules = [ ./operator/yggdrasil.nix ./modules/template.nix ];
       };
     in
     {
