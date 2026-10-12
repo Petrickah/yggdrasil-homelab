@@ -6,7 +6,7 @@
   #   git clone https://github.com/<you>/yggdrasil-homelab ~/homelab && cd ~/homelab
   #   cp /etc/nixos/site.json .                                   # gitignored, but in the kit
   #   cp /etc/nixos/share/secrets/admin-key.age share/secrets/    # same — or from the NAS kit
-  #   cp /etc/nixos/share/services/hermes/mind-vault.nix share/services/hermes/   # same
+  #   cp /etc/nixos/share/services/hermes/settings.nix share/services/hermes/     # same
   #   mkdir -p ~/.config/sops/age && age -d -o ~/.config/sops/age/keys.txt share/secrets/admin-key.age
   #   python3 bootstrap.py …
   # Every copy matters: a kit built from a clone without them (including this

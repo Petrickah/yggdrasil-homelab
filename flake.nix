@@ -4,6 +4,10 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     hermes-agent.url = "github:NousResearch/hermes-agent";
+    hermes-webui = {
+      url = "github:nesquena/hermes-webui";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     sops-nix = {
       url = "github:Mic92/sops-nix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -11,7 +15,7 @@
   };
 
   outputs =
-    { self, nixpkgs, sops-nix, hermes-agent, ... }:
+    { self, nixpkgs, sops-nix, hermes-agent, hermes-webui, ... }:
     let
       system = "x86_64-linux";
       lib    = nixpkgs.lib;
@@ -57,7 +61,7 @@
 
       mkHost = hostname: lib.nixosSystem {
         inherit system;
-        specialArgs = { inherit site kitSource hermes-agent; };
+        specialArgs = { inherit site kitSource hermes-agent hermes-webui; };
         modules = [
           ./hosts/${hostname}.nix
           ./modules/proxmox.nix

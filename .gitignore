@@ -19,9 +19,9 @@ share/secrets/*
 # This installation's addresses and hosts — copy site.example.json
 site.json
 
-# Personal text about the owner (mind-vault's instructions); optional, the
-# hermes module imports it only when present
-share/services/hermes/mind-vault.nix
+# Personal text about the owner (mind-vault's instructions) and other personal settings;
+# optional, the hermes module imports it only when present
+share/services/hermes/settings.nix
 
 # Kept in the private vault only: project notes, AI agent directives, and the
 # legacy Docker Compose setup on the old single VM (retired after migration)

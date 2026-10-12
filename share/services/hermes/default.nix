@@ -1,10 +1,11 @@
-{ config, lib, pkgs, site, hermes-agent, ... }:
+{ config, lib, pkgs, site, hermes-agent, hermes-webui, ... }:
 let
   cfg    = config.services.hermes-agent;
   groups = [ "messaging" "firecrawl" ];   # Discord + web.backend firecrawl
   hermes = cfg.package.override { extraDependencyGroups = groups; };
   python = hermes.python.pkgs;
   canon  = n: lib.toLower (builtins.replaceStrings [ "_" "." ] [ "-" "-" ] n);
+
   # Python packages Hermes's sealed venv already ships, read from its site-packages
   sealed = map (d: canon (builtins.head (lib.splitString "-" d)))
     (lib.filter (lib.hasSuffix ".dist-info")
@@ -17,12 +18,13 @@ let
       (python.requiredPythonModules [ python.qdrant-client python.fastembed ]));
 in
 {
-  # mind-vault.nix holds the plugin's instructions and tool descriptions, which
-  # describe the owner: gitignored, kept only in the kit (like site.json)
+  # settings.nix holds Hermes's own settings, mind-vault's instructions among
+  # them (they describe the owner): gitignored, kept only in the kit (like site.json)
   imports = [
     hermes-agent.nixosModules.default
+    hermes-webui.nixosModules.default
     ../hermes-terminal
-  ] ++ lib.optional (builtins.pathExists ./mind-vault.nix) ./mind-vault.nix;
+  ] ++ lib.optional (builtins.pathExists ./settings.nix) ./settings.nix;
 
   # Data in /var/lib/services/hermes, copied once by `bootstrap.py seed`
   homelab.services.hermes.owner = "hermes:hermes";
@@ -40,66 +42,6 @@ in
     environmentFiles      = [ config.sops.secrets."hermes_env".path ];
     extraDependencyGroups = groups;
     extraPythonPackages   = pluginDeps;
-
-    mcpServers   = {
-      filesystem = {
-        command  = "npx";
-        args     = [
-          "-y"
-          "@modelcontextprotocol/server-filesystem"
-          "/var/lib/services/hermes/workspace"
-        ];
-      };
-      obsidian   = {
-        command  = "npx";
-        args     = [
-          "-y"
-          "@bitbonsai/mcpvault@0.16.0"
-          "/var/lib/services/hermes/workspace"
-        ];
-      };
-    };
-
-    settings = {
-      plugins.enabled  = [ "mind-vault" ]; # Enable the mind-vault plugin
-      dashboard.theme  = "ember";
-      # Model Settings     (for reasoning)
-      model.provider   = "openrouter";
-      model.base_url   = "https://openrouter.ai/api/v1";
-      model.default    = "openai/gpt-6-luna";
-      # Terminal Settings  (commands run in the hermes-terminal sandbox, with the
-      # vault mounted at /workspace; the container is reused, then recycled)
-      terminal = {
-        backend              = "docker";
-        docker_image         = "hermes-terminal:latest";
-        docker_mount_cwd_to_workspace = true;
-        docker_workspace_dir = "/workspace";
-        home_mode            = "auto";
-        container_cpu        = 1;
-        container_memory     = 5120;
-        container_disk       = 51200;
-        container_persistent = true;
-        lifetime_seconds     = 300;
-        timeout              = 180;
-      };
-      # Web Settings       (for Deep Research)
-      web.backend      = "firecrawl";
-      web.use_gateway  = false;
-      # Default Compression (for sessions)
-      compression.enabled = true;
-      # Disable the normal memory provider
-      memory.memory_enabled       = false;
-      memory.user_profile_enabled = false;
-      # Memory Settings    (for knowledge retrieval)
-      memory.provider   = "mind-vault";
-      memory.mind-vault = {
-        url    = "https://${config.networking.hostName}.${site.tailnet}:6333";
-        inject = [ "memories/USER.md" ];
-        inject_max_chars = 20000;
-        collection_name  = "mind-vault";
-        embedding_model  = "sentence-transformers/all-MiniLM-L6-v2";
-      };
-    };
   };
 
   # Reached only through Tailscale Serve: Dashboard over HTTPS
@@ -134,4 +76,24 @@ in
 
   # Reached only through Tailscale Serve: Syncthing Dashboard over HTTPS
   homelab.heimdall.serve."8384" = "http://127.0.0.1:8384";
+
+  # Hermes Agent makes best use of a Web Interface; Hermes WebUI.
+  # Enable and configure the user interface.
+  services.hermes-webui = {
+    enable           = true;
+    user             = "hermes";
+    group            = "hermes";
+    stateDir         = "/var/lib/services/hermes";
+    hermesHome       = "/var/lib/services/hermes/.hermes";
+    host             = "127.0.0.1";
+    port             = 8787;
+    environmentFiles = [ config.sops.secrets."hermes_env".path ];
+    # The same venv as the gateway, plus mind-vault's dependencies: the WebUI
+    # runs the agent with that venv's python, not through the hermes wrapper
+    agent.package    = hermes;
+    extraEnvironment.PYTHONPATH = lib.makeSearchPath hermes.python.sitePackages pluginDeps;
+  };
+
+  # Reached only through Tailscale Serve: Hermes WebUI over HTTPS
+  homelab.heimdall.serve."8787" = "http://127.0.0.1:8787";
 }
