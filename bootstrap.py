@@ -12,6 +12,7 @@ Nix and the sops admin age key (~/.config/sops/age/keys.txt).
   seed    <service>           copy share/services/<service>/data to the VM, once
   agent   [--hours N]         load the homelab SSH key into your ssh-agent, from sops
   ssh     [command…]          log into --host as its own user (or run one command)
+  mem                         where each VM's memory goes: available, services, processes
   secrets list | show <file> [key] | edit <file> | set <file> <key> [--from-file F]
   clean   [--archives] [--images] [--store] [--all]
   create  | backup | restore [--from <file>]   (--host yggdrasil only)
@@ -343,6 +344,22 @@ def step_ssh(host, user, command):
     sys.exit(subprocess.run(["ssh", *opts, *([] if command else ["-t"]), target, *command]).returncode)
 
 
+def step_mem(host):
+    """Where a VM's memory really goes. Proxmox shows the page cache as used;
+    `available` is what the system can still hand out, then who holds the rest:
+    services (cgroups, containers included), processes, containers."""
+    print(f"\n═══ Memory on {host} ═══")
+    ssh(f"{vm_user(host)}@{host}",
+        "free -h; "
+        "echo; echo '── By service (cgroup) ──'; "
+        "sudo systemd-cgtop -b -n 1 -m --depth=2 --raw | "
+        "awk 'NR==1 || $4 ~ /^[0-9]+$/ {printf \"%-55s %8.0f MiB\\n\", $1, $4/1048576}' | sort -k2 -nr | head -12; "
+        "echo; echo '── By process (RSS) ──'; "
+        "ps -eo rss=,comm= --sort=-rss | head -10 | awk '{printf \"%6.0f MiB  %s\\n\", $1/1024, $2}'; "
+        "if command -v docker >/dev/null; then echo; echo '── Containers ──'; "
+        "sudo docker stats --no-stream --format '{{.Name}}\t{{.MemUsage}}'; fi")
+
+
 def secret_file(name):
     """share/secrets/<name>, accepting `mimisbrunnr`, `mimisbrunnr.yaml` or a path."""
     path = SECRETS_DIR / Path(name).name
@@ -414,9 +431,17 @@ def step_clean(host, proxmox, archives, images, store):
         print(f"\n═══ Clean qcow2 images for {host} ═══")
         ssh(target, f"rm -f {PROXMOX_IMPORT_DIR}/nixos-{host}-*.qcow2")
 
-    if store:
+    if store and host is None:
         print(f"\n═══ Clean local Nix store ═══")
         run(["nix", "store", "gc"], cwd=REPO_ROOT)
+    elif store and host != ROOT:
+        # A generation keeps its whole closure alive, so GC alone frees little:
+        # drop the old generations (same 14 days as nix.gc in proxmox.nix), then
+        # rewrite the boot menu, which otherwise lists them until the next switch
+        print(f"\n═══ Clean the Nix store on {host} ═══")
+        ssh(f"{vm_user(host)}@{host}",
+            "sudo nix-collect-garbage --delete-older-than 14d && "
+            "sudo /run/current-system/bin/switch-to-configuration boot")
 
 
 # ── Yggdrasil, the root LXC ────────────────────────────────────────────────
@@ -753,7 +778,7 @@ def parse_args():
     clean.add_argument("--all", action="store_true", help="--archives --images --store")
     clean.add_argument("--archives", action="store_true", help="Templates + kits (local links, NAS)")
     clean.add_argument("--images", action="store_true", help="qcow2 files in local:import")
-    clean.add_argument("--store", action="store_true", help="nix store gc, locally")
+    clean.add_argument("--store", action="store_true", help="Nix store GC on the VMs (generations older than 14 days) and, without --host, locally")
 
     # ── switch ──
     sub.add_parser("switch", help="Build, copy and activate the config on the running VM")
@@ -765,6 +790,9 @@ def parse_args():
     # ── ssh ──
     ssh_cmd = sub.add_parser("ssh", help="Log into --host as its own user, or run one command there")
     ssh_cmd.add_argument("remote", nargs=argparse.REMAINDER, help="Optional command to run instead of a shell")
+
+    # ── mem ──
+    sub.add_parser("mem", help="Show where a VM's memory goes (all VMs without --host)")
 
     # ── secrets ──
     secrets = sub.add_parser("secrets", help="List, read or edit the sops files")
@@ -827,10 +855,10 @@ def main():
     elif args.command == "clean":
         for h in hosts:
             step_clean(h, args.proxmox, archives=args.archives or args.all,
-                       images=args.images or args.all, store=False)
+                       images=args.images or args.all, store=args.store or args.all)
         if not args.host and (args.archives or args.all):
             step_clean(None, args.proxmox, archives=True, images=False, store=False)
-        if args.store or args.all:
+        if not args.host and (args.store or args.all):
             step_clean(None, args.proxmox, archives=False, images=False, store=True)
 
     elif args.command == "init":
@@ -864,6 +892,12 @@ def main():
             rotate_ssh_key(args.proxmox, args.user)
         elif args.what == "secret":
             rotate_secret(args.file, args.key, args.from_file)
+
+    elif args.command == "mem":
+        if ROOT in hosts:
+            sys.exit(f"✕ mem is for the VMs; on {ROOT} use `ssh` and `free -h`.")
+        for h in hosts:
+            step_mem(h)
 
     elif args.command == "ssh":
         if not args.host:

@@ -7,6 +7,16 @@
   boot.loader.systemd-boot.enable = true;
   boot.loader.efi.canTouchEfiVariables = false;
 
+  # Keep the boot menu and the store from growing with every switch: the menu
+  # lists the last 10 generations; a weekly GC drops those older than 14 days
+  # (deleting generations is what frees their store paths)
+  boot.loader.systemd-boot.configurationLimit = 10;
+  nix.gc = {
+    automatic = true;
+    dates     = "weekly";
+    options   = "--delete-older-than 14d";
+  };
+
   # mk-qcow2.sh creates a small disk; Proxmox resizes it on import and the
   # root partition + filesystem grow into the extra space on boot.
   boot.growPartition = true;
