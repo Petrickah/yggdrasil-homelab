@@ -32,6 +32,15 @@ in
     after = [ "hermes-terminal-image.service" ];
   };
 
+  # The WebUI is a separate service that runs the agent in its own process, and its
+  # module sets no PATH: without this a WebUI session logs "Docker is not installed"
+  # and loses the terminal and file tools. Same CLI, same image ordering.
+  systemd.services.hermes-webui = {
+    path  = [ config.virtualisation.docker.package ];
+    wants = [ "hermes-terminal-image.service" ];
+    after = [ "hermes-terminal-image.service" ];
+  };
+
   # Load the image into Docker; runs again only when the image changes
   systemd.services.hermes-terminal-image = {
     description = "Load the hermes-terminal image into Docker";
