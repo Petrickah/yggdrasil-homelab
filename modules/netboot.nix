@@ -24,11 +24,16 @@ in
     bind-interfaces = true;
     dhcp-range      = [ "${subnet},proxy,255.255.255.0" ];
     pxe-prompt      = [ "\"netboot.xyz\",0" ];
-    # The 4th field is the TFTP server; without it dnsmasq points at itself
+    # The 4th field is the TFTP server; without it dnsmasq points at itself.
+    # UEFI goes through the signed shim -> plain iPXE -> autoexec.ipxe (all in
+    # secureboot-x86_64/, autoexec.ipxe is ours): netboot.xyz.efi's embedded
+    # script looks for local-vars.ipxe on the router's next-server first and,
+    # with no TFTP there, falls back to the online menu. Works with Secure
+    # Boot on too (signed kernels only). BIOS still needs "p" at the prompt.
     pxe-service     = [
       "x86PC,\"netboot.xyz BIOS\",netboot.xyz.kpxe,${tftpServer}"
-      "x86-64_EFI,\"netboot.xyz UEFI\",netboot.xyz.efi,${tftpServer}"
-      "BC_EFI,\"netboot.xyz UEFI\",netboot.xyz.efi,${tftpServer}"
+      "x86-64_EFI,\"netboot.xyz UEFI\",secureboot-x86_64/shimx64.efi,${tftpServer}"
+      "BC_EFI,\"netboot.xyz UEFI\",secureboot-x86_64/shimx64.efi,${tftpServer}"
     ];
     log-dhcp = true;  # shows in journalctl -u dnsmasq what each client requests
   };
