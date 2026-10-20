@@ -1,5 +1,9 @@
 { config, lib, pkgs, site, ... }:
 {
+  imports = [
+    ../modules/netboot.nix
+  ];
+
   # Identity and static networking — no cloud-init involved, everything below
   # is baked into this host's own image at build time.
   homelab.heimdall.enable = true;
