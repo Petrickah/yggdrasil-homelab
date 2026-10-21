@@ -5,8 +5,8 @@ module "alfheim" {
   node_name = local.proxmox_node
   hostname  = "alfheim"
   vm_id     = 202
-  cores     = 2
-  memory    = 4096
+  cores     = 4      # the workstation: Nix builds, VS Code server, Claude Code
+  memory    = 8192
   disk_size = 128
   disk_file = lookup(var.images, "alfheim", "")
 }

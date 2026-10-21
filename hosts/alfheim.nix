@@ -2,6 +2,7 @@
 {
   imports = [
     ../modules/netboot.nix
+    ../share/services/workstation
   ];
 
   # Identity and static networking — no cloud-init involved, everything below

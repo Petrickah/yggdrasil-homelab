@@ -33,8 +33,8 @@
     }
   },
   "syncthing": {
-    "hermes-agent" : {
-      "id": "W77DXXX-XXXXXXX-...",
+    "mac-mini" : {
+      "id": "63B7XXX-XXXXXXX-...",
       "address": "tcp://100.x.x.x:22000"
     }
   },

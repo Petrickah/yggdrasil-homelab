@@ -66,14 +66,14 @@ in
     guiAddress       = "127.0.0.1:8384";
     settings = {
       gui.insecureSkipHostcheck = true;
-      devices."hermes-agent" = {
-        id        = site.syncthing.hermes-agent.id;
-        addresses = [ site.syncthing.hermes-agent.address ];
+      devices."mac-mini" = {
+        id        = site.syncthing.mac-mini.id;
+        addresses = [ site.syncthing.mac-mini.address ];
       };
       folders.vault = {
         label   = "Obsidian Vault";
         path    = "/var/lib/services/hermes/workspace";
-        devices = [ "hermes-agent" ];
+        devices = [ "mac-mini" ];
       };
     };
   };
