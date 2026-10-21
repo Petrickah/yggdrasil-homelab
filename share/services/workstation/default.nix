@@ -79,10 +79,10 @@ in
     "d ${home}/.claude 0700 ${user} users - -"
     "C ${home}/.claude/.stignore - - - - ${claudeIgnore}"
     "z ${home}/.claude/.stignore 0644 ${user} users - -"
-    # Claude Code keys project memory by the launch path; this machine's
-    # (/home/<user>/vault) shares the one the other machines already use
+    # Claude Code keys a project (memory and sessions) by its launch path; this
+    # machine's (/home/<user>/vault) is the same project the other machines use.
+    # Plain L: made only where nothing exists yet, never replacing real sessions
     "d ${home}/.claude/projects 0700 ${user} users - -"
-    "d ${home}/.claude/projects/-home-${user}-vault 0700 ${user} users - -"
-    "L ${home}/.claude/projects/-home-${user}-vault/memory - - - - ../-home-hermes-vault/memory"
+    "L ${home}/.claude/projects/-home-${user}-vault - - - - -home-hermes-vault"
   ];
 }
