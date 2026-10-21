@@ -9,7 +9,7 @@ let
   home = config.users.users.${user}.home;
 
   # Ignore rules are per device: the same ones the other machines use, put in
-  # place before the first sync (C copies only when the file doesn't exist yet)
+  # place before the first sync, and never replaced once there
   vaultIgnore = pkgs.writeText "vault-stignore" ''
     // macOS/Windows filesystem junk
     .DS_Store
@@ -26,9 +26,12 @@ let
     ~$*
 
     // 10_Homelab is a git repo (github.com/Petrickah/yggdrasil-homelab): git syncs
-    // it between machines. Only its vault-only notes go through Syncthing.
+    // it between machines. Only its vault-only files (notes, CLAUDE.md,
+    // _habitat.md) go through Syncthing.
     // Exceptions first — Syncthing applies the first pattern that matches.
     !/10_Homelab/share/notes
+    !/10_Homelab/CLAUDE.md
+    !/10_Homelab/_habitat.md
     /10_Homelab
   '';
   # Each machine logs into Claude Code on its own
@@ -80,13 +83,24 @@ in
   };
   homelab.heimdall.serve."8384" = "http://127.0.0.1:8384";
 
+  # Not tmpfiles C + z: tmpfiles ignores a second line for the same path, so
+  # the copy stayed root's and read-only. This one sets the owner, once.
+  systemd.services.workstation-stignore = {
+    description = "Put Syncthing's ignore rules in place before the first sync";
+    wantedBy    = [ "multi-user.target" ];
+    before      = [ "syncthing.service" ];
+    serviceConfig.Type = "oneshot";
+    script = ''
+      for rule in "${home}/vault/.stignore=${vaultIgnore}" "${home}/.claude/.stignore=${claudeIgnore}"; do
+        target=''${rule%%=*}
+        [ -e "$target" ] || install -D -o ${user} -g users -m 0644 "''${rule#*=}" "$target"
+      done
+    '';
+  };
+
   systemd.tmpfiles.rules = [
     "d ${home}/vault   0750 ${user} users - -"
-    "C ${home}/vault/.stignore - - - - ${vaultIgnore}"
-    "z ${home}/vault/.stignore 0644 ${user} users - -"     # C keeps the store's root, read-only copy
     "d ${home}/.claude 0700 ${user} users - -"
-    "C ${home}/.claude/.stignore - - - - ${claudeIgnore}"
-    "z ${home}/.claude/.stignore 0644 ${user} users - -"
     # Claude Code keys a project (memory and sessions) by its launch path; this
     # machine's (/home/<user>/vault) is the same project the other machines use.
     # Plain L: made only where nothing exists yet, never replacing real sessions
