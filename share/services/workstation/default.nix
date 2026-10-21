@@ -44,6 +44,10 @@ in
   # nixpkgs follows. It runs here thanks to nix-ld, below.
   environment.localBinInPath = true;
 
+  # direnv (+ nix-direnv, which caches the shells) for the VS Code direnv
+  # extension: a folder's .envrc loads its flake's dev shell on its own
+  programs.direnv.enable = true;
+
   # VS Code Remote-SSH runs a generic Node server; nix-ld gives it the /lib64 loader
   programs.nix-ld.enable = true;
 
