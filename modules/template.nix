@@ -44,19 +44,24 @@ in
     };
     services = lib.mkOption {
       description = ''
-        Services with data in /var/lib/services/<name> on this host. The data is
-        copied there once, from share/services/<name>/data, by `bootstrap.py seed`.
+        Services with data in /var/lib/services/<name> on this host. `bootstrap.py
+        backup` archives that data to the NAS, encrypted; `restore` puts it back.
       '';
       default     = { };
-      type        = lib.types.attrsOf (lib.types.submodule {
+      type        = lib.types.attrsOf (lib.types.submodule ({ name, ... }: {
         options = {
-          owner = lib.mkOption {
-            description = "user:group to give the copied data; null keeps the source's own (what the image expects after a migration).";
-            type        = lib.types.nullOr lib.types.str;
-            default     = null;
+          units = lib.mkOption {
+            description = "Units stopped while the data is archived or replaced, so databases are consistent.";
+            type        = lib.types.listOf lib.types.str;
+            default     = [ "docker-${name}.service" ];
+          };
+          exclude = lib.mkOption {
+            description = "Paths inside the data left out of the archive (and kept as they are on restore) — e.g. what Syncthing brings back anyway.";
+            type        = lib.types.listOf lib.types.str;
+            default     = [ ];
           };
         };
-      });
+      }));
     };
   };
 

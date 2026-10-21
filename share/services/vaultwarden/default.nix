@@ -1,7 +1,7 @@
 { config, lib, pkgs, ... }:
 {
-  # Data in /var/lib/services/vaultwarden, copied once by `bootstrap.py seed` —
-  # stop the old container first, SQLite's -wal/-shm files must be consistent.
+  # Data in /var/lib/services/vaultwarden; `bootstrap.py backup/restore` stop
+  # the container around it, so SQLite's -wal/-shm files stay consistent.
   homelab.services.vaultwarden = { };
 
   virtualisation.docker.enable = true;

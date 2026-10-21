@@ -26,8 +26,12 @@ in
     ../hermes-terminal
   ] ++ lib.optional (builtins.pathExists ./settings.nix) ./settings.nix;
 
-  # Data in /var/lib/services/hermes, copied once by `bootstrap.py seed`
-  homelab.services.hermes.owner = "hermes:hermes";
+  # Data in /var/lib/services/hermes: state, sessions, WebUI and Syncthing's own
+  # config. The vault (workspace) stays out of backups — Syncthing brings it back
+  homelab.services.hermes = {
+    units   = [ "hermes-agent.service" "hermes-backend.service" "hermes-webui.service" "syncthing.service" ];
+    exclude = [ "workspace" ];
+  };
 
   # Hermes downloads a generic Node.js for its npx MCP servers (filesystem,
   # obsidian); nix-ld provides the /lib64 loader NixOS doesn't have

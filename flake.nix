@@ -32,9 +32,9 @@
 
       # The infrastructure kit: every host, every module, Terraform, scripts and
       # the encrypted secrets — never service data, plaintext secrets, state or
-      # build results (data holds secrets of its own: it goes straight to the VMs
-      # with `bootstrap.py seed`). The same for every machine: it becomes their
-      # /etc/nixos, and `.#kit` is it as one archive.
+      # build results (data holds secrets of its own: it lives on the VMs, and
+      # `bootstrap.py backup` sends it to the NAS encrypted). The same for every
+      # machine: it becomes their /etc/nixos, and `.#kit` is it as one archive.
       fs = lib.fileset;
       serviceDirs = lib.attrNames (lib.filterAttrs (_: type: type == "directory") (builtins.readDir ./share/services));
       kitSource = fs.toSource {

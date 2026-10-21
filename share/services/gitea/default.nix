@@ -4,8 +4,8 @@ let
   domain = "${config.networking.hostName}.${site.tailnet}";
 in
 {
-  # Data in /var/lib/services/gitea (repos, SQLite, SSH host keys), copied once
-  # by `bootstrap.py seed`, keeping its ownership — uid 1000 is `git` in the image.
+  # Data in /var/lib/services/gitea (repos, SQLite, SSH host keys), owned by
+  # uid 1000 (`git` in the image); `bootstrap.py backup/restore` keep that.
   homelab.services.gitea = { };
 
   virtualisation.docker.enable = true;

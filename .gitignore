@@ -31,6 +31,5 @@ _habitat.md
 share/services/*/compose.yml
 share/services/registry/cleanup-old-tags.py
 share/services/hermes-terminal/Dockerfile
-share/services/dump-server/
 share/scripts/backup.sh
 share/scripts/status.sh

@@ -9,15 +9,18 @@ Nix and the sops admin age key (~/.config/sops/age/keys.txt).
                               (--host yggdrasil: the root LXC template, for `pct create`)
   init    [--apply|--destroy] terraform, with its state kept on the Proxmox host
   switch                      build here, copy over SSH, activate on the running VM
-  seed    <service>           copy share/services/<service>/data to the VM, once
+  backup                      a VM's service data → the NAS, encrypted for the admin key
+                              (--host yggdrasil: vzdump of the root LXC)
+  restore [--service S] [--from F] [--to DIR]
+                              the newest (or --from) backup back onto the VM, or only
+                              unpacked into DIR (--host yggdrasil: the root LXC from vzdump)
   agent   [--hours N]         load the homelab SSH key into your ssh-agent, from sops
   ssh     [command…]          log into --host as its own user (or run one command)
   mem                         where each VM's memory goes: available, services, processes
   secrets list | show <file> [key] | edit <file> | set <file> <key> [--from-file F]
   clean   [--archives] [--images] [--store] [--all]
-  create  | backup | restore [--from <file>]   (--host yggdrasil only)
-                              the root LXC is never Terraform's: created here,
-                              backed up here, removed only by hand in Proxmox
+  create                      (--host yggdrasil only) the root LXC is never Terraform's:
+                              created here, backed up here, removed only by hand in Proxmox
   rotate  console-password | admin-passphrase | admin-key | host-key |
           proxmox-token | ssh-key | secret <file> <key>
 """
@@ -28,6 +31,7 @@ import getpass
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -42,8 +46,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent          # 10_Homelab/ or the kit
 
 # `path:` makes Nix read the folder as it is on disk. Without it, inside a git
-# checkout Nix would only see tracked files — and site.json, the service seeds
-# and admin-key.age are gitignored on purpose, yet must still end up in the kit.
+# checkout Nix would only see tracked files — and site.json, settings.nix and
+# admin-key.age are gitignored on purpose, yet must still end up in the kit.
 FLAKE = f"path:{REPO_ROOT}"
 
 # Everything specific to this installation, shared with Nix and Terraform
@@ -79,6 +83,14 @@ PROXMOX_TEMPLATE_DIR = "/mnt/pve/syno-nfs/template/cache"  # syno-nfs = the NAS
 PROXMOX_IMPORT_DIR   = "/var/lib/vz/import"                # local:import
 PROXMOX_STATE_DIR    = "/root/homelab"                     # terraform state lives here
 PROXMOX_BACKUP_DIR   = "/mnt/pve/syno-nfs/dump"            # vzdump on the NAS
+
+# Service data backups: one folder per VM on the NAS, reached as /mnt/syno-nfs
+# by the VMs (proxmox.nix) and as /mnt/pve/syno-nfs by the Proxmox host
+DATA_DIR       = "/var/lib/services"
+DATA_BACKUPS   = "homelab/data"
+VM_NAS         = "/mnt/syno-nfs"
+PROXMOX_NAS    = "/mnt/pve/syno-nfs"
+DATA_KEEP_LAST = 4
 
 # sops: the admin key (outside the repo) and the passphrase-protected copy in it
 AGE_DIR       = Path.home() / ".config" / "sops" / "age"
@@ -123,6 +135,12 @@ def ssh_opts():
 
 def ssh(target, cmd, **kwargs):
     return run(["ssh", *ssh_opts(), target, cmd], **kwargs)
+
+
+def ssh_script(target, script, what):
+    """Run a bash script as root on a VM, showing `what` instead of the script."""
+    print(f"✦ {target}: {what}")
+    return subprocess.run(["ssh", *ssh_opts(), target, f"sudo bash -c {shlex.quote(script)}"], check=True)
 
 
 def scp(src, dst):
@@ -296,40 +314,119 @@ def step_switch(host, user):
                 f"sudo systemd-run --collect --no-ask-password --pipe --quiet --service-type=exec "
                 f"--unit=bootstrap-switch-to-configuration {toplevel}/bin/switch-to-configuration switch")
 
-def step_seed(host, service, user):
-    """Copy a service's data straight to the VM, once, before its first switch.
+def admin_recipient():
+    """The admin's public age key, from its `&admin` anchor in .sops.yaml."""
+    for line in SOPS_CONFIG.read_text().splitlines():
+        if line.lstrip().startswith("- &admin "):
+            return line.split()[-1]
+    sys.exit(f"✕ No &admin key in {SOPS_CONFIG}")
 
-    Never through the kit: data carries secrets of its own (keys, tokens,
-    private repos), and the kit lands in the world-readable store and on the
-    NAS. Ownership and modes are kept as they are — after a migration that's
-    what the container image expects."""
-    print(f"\n═══ Seed {service} on {host} ═══")
-    src = REPO_ROOT / "share" / "services" / service / "data"
-    if not src.is_dir():
-        sys.exit(f"✕ No {src.relative_to(REPO_ROOT)} to copy.")
 
-    declared = nix_eval_json(f"nixosConfigurations.{host}.config.homelab.services", f's: s."{service}" or null')
-    if declared is None:
-        sys.exit(f"✕ {host} doesn't declare homelab.services.{service} — import its module in hosts/{host}.nix first.")
+def host_services(host, only=None):
+    """The services with data on `host` (homelab.services), or just `only`."""
+    services = nix_eval_json(f"nixosConfigurations.{host}.config.homelab.services")
+    if only:
+        if only not in services:
+            sys.exit(f"✕ {host} has no service `{only}` — it has: {', '.join(services) or 'none'}.")
+        services = {only: services[only]}
+    return services
 
-    target = f"{user or vm_user(host)}@{host}"
-    dst    = f"/var/lib/services/{service}"
-    if subprocess.run(["ssh", *ssh_opts(), target, f"sudo test -e {dst}"]).returncode == 0:
-        sys.exit(f"✕ {dst} already exists on {host}. seed only fills an empty spot — "
-                 "remove it by hand if you really mean to replace the data.")
 
-    # Into a temporary directory first, renamed only once everything arrived
-    tmp    = f"/var/lib/services/.{service}.seed"
-    chown  = f"sudo chown -R {declared['owner']} {tmp} && " if declared.get("owner") else ""
-    reader = ([] if os.geteuid() == 0 else ["sudo", "-n"]) + ["tar", "-C", str(src), "--numeric-owner", "-cf", "-", "."]
-    tar = subprocess.Popen(reader, stdout=subprocess.PIPE)
-    ssh(target, f"sudo rm -rf {tmp} && sudo mkdir -p {tmp} && sudo tar -C {tmp} --numeric-owner -xpf - && "
-                f"{chown}sudo mv {tmp} {dst}", stdin=tar.stdout)
-    tar.stdout.close()
-    if tar.wait() != 0:
-        sys.exit("✕ Reading the local data failed.")
-    size = ssh(target, f"sudo du -sh {dst}", capture_output=True, text=True).stdout.split()[0]
-    print(f"✔ {service} data is on {host} ({size}). Now `switch` to start it.")
+def step_backup_data(host):
+    """Archive the host's service data to the NAS, encrypted for the admin key.
+
+    The VM writes the archive itself, onto its own NAS mount, with only the
+    admin's public key: it can make backups but can't read any — and the NAS
+    share is served without a login, so nothing lands there in clear. Each
+    service's units stop for the few seconds tar needs, so its databases
+    are consistent."""
+    print(f"\n═══ Back up the service data of {host} ═══")
+    services = host_services(host)
+    if not services:
+        print(f"✔ {host} declares no service data — nothing to back up.")
+        return
+
+    units    = " ".join(sorted({u for s in services.values() for u in s["units"]}))
+    excludes = " ".join(f"--exclude={shlex.quote(f'{n}/{p}')}" for n, s in services.items() for p in s["exclude"])
+    folder   = f"{VM_NAS}/{DATA_BACKUPS}/{host}"
+    archive  = f"{folder}/data-{host}-{datetime.now():%Y%m%d-%H%M%S}.tar.zst.age"
+    script = f"""set -euo pipefail
+cd {DATA_DIR}
+names=$(ls -d {" ".join(services)} 2>/dev/null || true)
+[ -n "$names" ] || {{ echo "No data in {DATA_DIR} yet."; exit 0; }}
+mkdir -p {folder}
+trap 'systemctl start {units}; rm -f {archive}.part' EXIT
+systemctl stop {units}
+tar --numeric-owner --anchored {excludes} -cf - $names | zstd -T0 -q | age -r {admin_recipient()} > {archive}.part
+systemctl start {units}
+mv {archive}.part {archive}
+trap - EXIT
+ls -1t {folder}/data-{host}-*.tar.zst.age | tail -n +{DATA_KEEP_LAST + 1} | xargs -r rm -f
+echo "✔ $names → $(du -h {archive} | cut -f1) {archive}"
+"""
+    ssh_script(f"{vm_user(host)}@{host}", script, f"stop {units}, archive, start them again")
+
+
+def step_restore_data(host, proxmox, service, from_file, to_dir):
+    """Put a VM's service data back from its newest backup on the NAS (or one
+    named with --from): decrypted here with the admin key, unpacked on the VM,
+    then swapped in with the service stopped. What it replaces stays beside it
+    as .<service>.pre-restore-<time>, until you delete it. Paths the backup
+    leaves out (`exclude`) move over from the old copy unchanged.
+
+    With --to, it only unpacks into a local folder, to look inside."""
+    print(f"\n═══ Restore the service data of {host} ═══")
+    if not ADMIN_KEY.exists():
+        sys.exit(f"✕ No admin key at {ADMIN_KEY} — decrypt share/secrets/admin-key.age there first.")
+    folder = f"{PROXMOX_NAS}/{DATA_BACKUPS}/{host}"
+    if from_file:
+        archive = from_file if "/" in from_file else f"{folder}/{from_file}"
+    else:
+        archive = latest_remote(proxmox, f"{folder}/data-{host}-*.tar.zst.age")
+        if not archive:
+            sys.exit(f"✕ No backup of {host} in {folder} — run `backup` on it first.")
+    print(f"✦ {Path(archive).name}")
+
+    if to_dir:
+        Path(to_dir).mkdir(parents=True, exist_ok=True)
+        unpack = ["tar", "--zstd", "-C", to_dir, "-xf", "-"] + ([service] if service else [])
+    else:
+        services = host_services(host, service)
+        stamp    = f"{datetime.now():%Y%m%d-%H%M%S}"
+        units    = " ".join(sorted({u for s in services.values() for u in s["units"]}))
+        swaps    = ""
+        for name, s in services.items():
+            old    = f".{name}.pre-restore-{stamp}"
+            keep   = "".join(f'  if [ -e {old}/{p} ]; then mkdir -p "$(dirname {name}/{p})"; mv {old}/{p} {name}/{p}; fi\n'
+                             for p in s["exclude"])
+            swaps += (f"if [ -d $stage/{name} ]; then\n"
+                      f"  if [ -e {name} ]; then mv {name} {old}; fi\n"
+                      f"  mv $stage/{name} {name}\n{keep}"
+                      f"  echo \"✔ {name} restored\" && if [ -e {old} ]; then echo \"  (the previous data: {DATA_DIR}/{old})\"; fi\n"
+                      f"fi\n")
+        script = f"""set -euo pipefail
+cd {DATA_DIR}
+stage=.restore-{stamp}
+mkdir $stage
+trap 'rm -rf $stage' EXIT
+zstd -dcq | tar -C $stage --numeric-owner -xpf - {" ".join(services) if service else ""}
+trap 'systemctl start {units}; rm -rf $stage' EXIT
+systemctl stop {units}
+{swaps}"""
+        unpack = ["ssh", *ssh_opts(), f"{vm_user(host)}@{host}", f"sudo bash -c {shlex.quote(script)}"]
+
+    # NAS → (Proxmox) → here, decrypted → VM: the clear data never touches a disk on the way
+    print(f"✦ {archive} → age -d → " + (to_dir if to_dir else f"{host}: unpack, stop {units}, swap in, start"))
+    reader = subprocess.Popen(["ssh", *ssh_opts(), f"root@{proxmox}", f"cat {shlex.quote(archive)}"],
+                              stdout=subprocess.PIPE)
+    decrypt = subprocess.Popen(["age", "-d", "-i", str(ADMIN_KEY)], stdin=reader.stdout, stdout=subprocess.PIPE)
+    reader.stdout.close()
+    result = subprocess.run([str(a) for a in unpack], stdin=decrypt.stdout)
+    decrypt.stdout.close()
+    if reader.wait() or decrypt.wait() or result.returncode:
+        sys.exit("✕ The restore failed — check on the VM: its units are started again, and data already "
+                 "swapped keeps its previous copy as .<service>.pre-restore-<time>.")
+    print(f"✔ Unpacked into {to_dir}." if to_dir else f"✔ {host} runs on the restored data.")
 
 
 def step_ssh(host, user, command):
@@ -801,21 +898,23 @@ def parse_args():
     secrets.add_argument("key", nargs="?", help="show/set: one key, e.g. hermes_env")
     secrets.add_argument("--from-file", help="set: read the value from this file (e.g. a whole .env)")
 
-    # ── seed ──
-    seed = sub.add_parser("seed", help="Copy a service's data to --host, once, before its first switch")
-    seed.add_argument("service", help="e.g. gitea — copies share/services/gitea/data")
-
     # ── init ──
     init = sub.add_parser("init", help="Initialize or destroy infrastructure")
     init.add_argument("--apply", action="store_true", help="Terraform apply")
     init.add_argument("--destroy", action="store_true", help="Terraform destroy")
     init.add_argument("--yes", action="store_true", help="Don't ask for confirmation")
 
+    # ── backup / restore ──
+    sub.add_parser("backup", help="VM service data → the NAS, encrypted (all VMs without --host); "
+                                  "--host yggdrasil: vzdump of the root LXC")
+    restore = sub.add_parser("restore", help="Service data back onto --host from its newest backup; "
+                                             "--host yggdrasil: the root LXC from vzdump")
+    restore.add_argument("--service", help="Only this service from the backup (default: all of them)")
+    restore.add_argument("--from", dest="from_file", help="A specific backup: file name, or full path on the Proxmox host")
+    restore.add_argument("--to", dest="to_dir", help="Only unpack the backup into this local folder, to look inside")
+
     # ── yggdrasil ──
     sub.add_parser("create", help="Create the root LXC (--host yggdrasil)")
-    sub.add_parser("backup", help="Back up the root LXC to the NAS (--host yggdrasil)")
-    restore = sub.add_parser("restore", help="Restore the root LXC from its newest backup (--host yggdrasil)")
-    restore.add_argument("--from", dest="from_file", help="A specific vzdump file on the Proxmox host")
 
     # ── rotate ──
     rotate = sub.add_parser("rotate", help="Rotate keys, passwords and tokens")
@@ -844,8 +943,8 @@ def main():
 
     if ROOT in hosts and (args.command in ("init", "switch") or getattr(args, "image", False)):
         sys.exit(f"✕ {ROOT} isn't a Terraform VM: `build` it, then `create`, `backup` or `restore` it.")
-    if args.command in ("create", "backup", "restore") and args.host != ROOT:
-        sys.exit(f"✕ `{args.command}` is only for the root LXC: add --host {ROOT}.")
+    if args.command == "create" and args.host != ROOT:
+        sys.exit(f"✕ `create` is only for the root LXC: add --host {ROOT}.")
 
     if args.command == "build":
         step_kit(args.proxmox)
@@ -870,10 +969,19 @@ def main():
         step_create_root(args.proxmox)
 
     elif args.command == "backup":
-        step_backup_root(args.proxmox)
+        if args.host == ROOT:
+            step_backup_root(args.proxmox)
+        else:
+            for h in hosts:
+                step_backup_data(h)
 
     elif args.command == "restore":
-        step_restore_root(args.proxmox, args.from_file)
+        if args.host == ROOT:
+            step_restore_root(args.proxmox, args.from_file)
+        elif not args.host:
+            sys.exit("✕ restore needs --host <vm>.")
+        else:
+            step_restore_data(args.host, args.proxmox, args.service, args.from_file, args.to_dir)
 
     elif args.command == "rotate":
         if args.what == "console-password":
@@ -911,11 +1019,6 @@ def main():
 
     elif args.command == "agent":
         step_agent(args.hours)
-
-    elif args.command == "seed":
-        if not args.host or args.host == ROOT:
-            sys.exit("✕ seed needs --host <vm>.")
-        step_seed(args.host, args.service, args.user)
 
     elif args.command == "switch":
         for h in hosts:

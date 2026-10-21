@@ -1,7 +1,7 @@
 { config, lib, pkgs, ... }:
 {
-  # Data in /var/lib/services/qdrant, copied once by `bootstrap.py seed` —
-  # stop the live container (or use a qdrant snapshot) first.
+  # Data in /var/lib/services/qdrant; `bootstrap.py backup/restore` stop the
+  # container around it.
   homelab.services.qdrant = { };
 
   # Configure Docker Container for qDrant
