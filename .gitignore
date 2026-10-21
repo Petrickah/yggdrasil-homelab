@@ -33,3 +33,6 @@ share/services/registry/cleanup-old-tags.py
 share/services/hermes-terminal/Dockerfile
 share/scripts/backup.sh
 share/scripts/status.sh
+
+# direnv's cache of the dev shell (.envrc)
+.direnv/

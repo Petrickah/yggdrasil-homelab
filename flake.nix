@@ -43,6 +43,7 @@
           (fs.maybeMissing ./results)
           (fs.maybeMissing ./__pycache__)
           (fs.maybeMissing ./.git)
+          (fs.maybeMissing ./.direnv)      # direnv's cache of the dev shell
           (fs.maybeMissing ./share/terraform/.terraform)
           (fs.fileFilter (f: lib.hasPrefix "terraform.tfstate" f.name || lib.hasSuffix ".tfvars.json" f.name) ./share/terraform)
           # Only encrypted files travel: sops' *.yaml and the passphrase-protected admin-key.age
