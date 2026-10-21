@@ -37,8 +37,12 @@ let
   '';
 in
 {
-  homelab.unfree = [ "claude-code" ];
-  environment.systemPackages = with pkgs; [ claude-code git gh ripgrep jq ];
+  environment.systemPackages = with pkgs; [ git gh ripgrep jq ];
+
+  # Claude Code is the native install (`curl -fsSL https://claude.ai/install.sh | bash`,
+  # into ~/.local/bin), which updates itself: it releases far more often than
+  # nixpkgs follows. It runs here thanks to nix-ld, below.
+  environment.localBinInPath = true;
 
   # VS Code Remote-SSH runs a generic Node server; nix-ld gives it the /lib64 loader
   programs.nix-ld.enable = true;
